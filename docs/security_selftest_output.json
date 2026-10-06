@@ -1,0 +1,9 @@
+{
+  "network_access": false,
+  "write_root": false,
+  "write_etc": false,
+  "leaked_env": false,
+  "docker_socket": false,
+  "is_root": false,
+  "fork_bomb_success": false
+}

@@ -24,20 +24,21 @@ def hardened_smoke():
     # Write to / fails (read-only root)
     # TCP connect fails (no network)
     # Runs as uid 1000
-    cmd = (
-        "docker run --rm "
-        "--network none "
-        "--cap-drop ALL "
-        "--security-opt no-new-privileges "
-        "--read-only "
-        "--tmpfs /tmp "
-        "--user 1000 "
-        "rerun-base:py311 "
-        "sh -c 'echo 1 && touch /test.txt 2>/dev/null || echo \"write failed\" && nc -z 8.8.8.8 53 2>/dev/null || echo \"network failed\" && id -u'"
-    )
+    cmd = [
+        "docker", "run", "--rm",
+        "--network", "none",
+        "--cap-drop", "ALL",
+        "--security-opt", "no-new-privileges",
+        "--read-only",
+        "--tmpfs", "/tmp",
+        "--user", "1000",
+        "rerun-base:py311",
+        "sh", "-c",
+        'echo 1 && touch /test.txt 2>/dev/null || echo "write failed" && nc -z 8.8.8.8 53 2>/dev/null || echo "network failed" && id -u'
+    ]
     
-    print(f"Executing: {cmd}")
-    res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    print(f"Executing: {' '.join(cmd)}")
+    res = subprocess.run(cmd, capture_output=True, text=True)
     out = res.stdout.strip().split('\n')
     
     if (len(out) >= 4 and
@@ -63,7 +64,8 @@ def main():
     # stubs for others
     subparsers.add_parser("wheelhouse")
     subparsers.add_parser("test")
-    subparsers.add_parser("bench")
+    bench_parser = subparsers.add_parser("bench")
+    bench_parser.add_argument("--systems", required=True, help="Comma-separated list of systems to evaluate (e.g., B-0,B-2)")
     subparsers.add_parser("demo-check")
     subparsers.add_parser("cleanup")
     subparsers.add_parser("api")
@@ -76,6 +78,7 @@ def main():
     subparsers.add_parser("record")
     subparsers.add_parser("replay")
     subparsers.add_parser("run")
+    subparsers.add_parser("build-benchmarks")
 
     args = parser.parse_args()
 
@@ -85,6 +88,24 @@ def main():
         images()
     elif args.command == "hardened-smoke":
         hardened_smoke()
+    elif args.command == "wheelhouse":
+        run_cmd(f"{sys.executable} scripts/make_wheelhouse.py")
+    elif args.command == "selftest":
+        run_cmd(f"{sys.executable} -m pytest tests/security/test_selftest.py -v")
+    elif args.command == "calibrate":
+        run_cmd(f"{sys.executable} scripts/calibrate_benchmark.py")
+    elif args.command == "seed-faults":
+        run_cmd(f"{sys.executable} scripts/seed_faults.py")
+    elif args.command == "papers":
+        run_cmd(f"{sys.executable} scripts/make_papers.py")
+    elif args.command == "build-benchmarks":
+        print("Building full Stage 4 benchmarks...")
+        run_cmd(f"{sys.executable} scripts/calibrate_benchmark.py")
+        run_cmd(f"{sys.executable} scripts/seed_faults.py")
+        run_cmd(f"{sys.executable} scripts/make_papers.py")
+        print("✅ Benchmarks built successfully!")
+    elif args.command == "bench":
+        run_cmd(f"{sys.executable} benchmarks/run_bench.py --systems {args.systems}")
     else:
         print(f"Command '{args.command}' is not yet implemented fully.")
 
