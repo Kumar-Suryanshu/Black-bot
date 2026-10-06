@@ -79,6 +79,7 @@ def main():
     subparsers.add_parser("replay")
     subparsers.add_parser("run")
     subparsers.add_parser("build-benchmarks")
+    subparsers.add_parser("export-digits")
 
     args = parser.parse_args()
 
@@ -98,14 +99,24 @@ def main():
         run_cmd(f"{sys.executable} scripts/seed_faults.py")
     elif args.command == "papers":
         run_cmd(f"{sys.executable} scripts/make_papers.py")
+    elif args.command == "test":
+        run_cmd(f"{sys.executable} -m pytest tests/unit tests/agent -v")
+    elif args.command == "cleanup":
+        from sandbox.cleanup import cleanup_orphans
+        cleanup_orphans()
+    elif args.command == "export-digits":
+        run_cmd(f"{sys.executable} scripts/export_digits.py")
     elif args.command == "build-benchmarks":
         print("Building full Stage 4 benchmarks...")
+        run_cmd(f"{sys.executable} scripts/export_digits.py")
         run_cmd(f"{sys.executable} scripts/calibrate_benchmark.py")
         run_cmd(f"{sys.executable} scripts/seed_faults.py")
         run_cmd(f"{sys.executable} scripts/make_papers.py")
         print("✅ Benchmarks built successfully!")
     elif args.command == "bench":
         run_cmd(f"{sys.executable} benchmarks/run_bench.py --systems {args.systems}")
+    elif args.command == "adversarial":
+        run_cmd(f"{sys.executable} scripts/run_adversarial.py")
     else:
         print(f"Command '{args.command}' is not yet implemented fully.")
 

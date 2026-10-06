@@ -1,0 +1,77 @@
+import os
+import re
+from pathlib import Path
+from typing import Dict, Any, List
+
+def inspect_repository(workspace: str) -> Dict[str, Any]:
+    ws = Path(workspace)
+    tree = []
+    readme_commands = []
+    dependency_files = []
+    config_files = []
+    entry_points = []
+    gpu_hints = []
+    network_hints = []
+    data_refs = []
+    has_smoke_test = (ws / "tests" / "smoke.py").exists()
+
+    for p in ws.rglob("*"):
+        if p.is_file():
+            rel = str(p.relative_to(ws)).replace("\\", "/")
+            if any(ign in rel for ign in [".git/", "__pycache__/", ".pytest_cache/", ".site/"]):
+                continue
+            tree.append(rel)
+            
+            # Dependency files
+            if "requirements" in rel and rel.endswith(".txt"):
+                dependency_files.append(rel)
+                
+            # Config files
+            if "config" in rel or rel.endswith((".yaml", ".yml", ".json", ".toml")):
+                config_files.append(rel)
+                
+            # Scan text files for hints
+            if rel.endswith((".py", ".md", ".txt", ".yaml", ".yml")):
+                try:
+                    text = p.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    continue
+                    
+                if rel.endswith(".py"):
+                    if 'if __name__ == "__main__":' in text or "if __name__ == '__main__':" in text:
+                        entry_points.append(rel)
+                        
+                    # GPU hints
+                    gpu_matches = re.finditer(r"(?i)(\.cuda\(|device\s*=\s*['\"]cuda|torch\.cuda|CUDA_VISIBLE_DEVICES)", text)
+                    for m in gpu_matches:
+                        gpu_hints.append({"file": rel, "text": m.group(0)})
+                        
+                    # Network hints
+                    net_matches = re.finditer(r"(?i)(requests\.(get|post)|urllib|download=True|https?://)", text)
+                    for m in net_matches:
+                        network_hints.append({"file": rel, "text": m.group(0)})
+
+    # README commands
+    readme_path = ws / "README.md"
+    if readme_path.exists():
+        readme_text = readme_path.read_text(encoding="utf-8", errors="ignore")
+        for line in readme_text.splitlines():
+            sline = line.strip()
+            if sline.startswith("python ") or sline.startswith("python3 "):
+                readme_commands.append(sline)
+
+    return {
+        "tree": tree,
+        "readme_commands": readme_commands,
+        "dependency_files": dependency_files,
+        "config_files": config_files,
+        "entry_points": entry_points,
+        "hints": {
+            "gpu": gpu_hints,
+            "network": network_hints,
+            "data_refs": data_refs
+        },
+        "python_requires": ">=3.11",
+        "has_smoke_test": has_smoke_test
+    }
+

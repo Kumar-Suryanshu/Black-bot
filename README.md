@@ -3,74 +3,96 @@
 **Rerun** is an autonomous AI coding agent designed to verify if code from a research paper reproduces the claimed headline numbers.
 
 ## Limits and Capabilities
-- The system runs code exclusively in a **hardened, network-isolated Docker sandbox**.
-- **No secrets or credentials** are passed to the sandbox or written to logs.
-- The AI **cannot** execute code directly, apply patches without human approval, write evidence itself, type metrics, or determine the final success status.
-- Designed strictly for Python 3.11 with limited runtime dependencies. GPU support is explicitly unsupported.
-- Uses `data/` and `wheelhouse/` strictly for local file and dependency management.
+- The system runs code exclusively in a **hardened, network-isolated Docker sandbox** (`network_mode="none"`, non-root, read-only root).
+- **No secrets or credentials** enter the sandbox or appear in logs/artifacts.
+- Strict authority hierarchy enforced by plain Python code:
+  $$\text{Human} > \text{Policy Checker (Code)} > \text{Critic (LLM)} > \text{Solver (LLM)}$$
+- The AI **cannot** execute code directly, apply patches without explicit human approval, write evidence itself, type metrics, or determine the final status.
+- Final reproduction status (`REPRODUCED`, `NOT_REPRODUCED`, `UNABLE_TO_EXECUTE`, `INCONCLUSIVE`) is computed deterministically from measured data.
+
+## Current Status
+- **Stages 0–8 Completed**: The core deterministic scaffolding, testing grounds, and the AI agent loop (Solver, Critic, Arbiter) are fully implemented.
+- **Code Audit & Invariants Hardened**: The core agent components have passed a rigorous code audit, ensuring strict adherence to the project's sandboxing, loop transition policies, and authorization invariants.
+- **Next Steps**: Advancing to Stage 9 (Backend API) and Stage 10 (Frontend Dashboard).
 
 ## Quickstart
 1. Review `.env.example` and set up your `.env`.
 2. Run `make setup`
 3. Run `make images`
 4. Run `make wheelhouse`
-5. Run `make seed-faults`
-6. Run `make api` and start exploring.
+5. Run `python scripts/dev.py build-benchmarks` (or `make seed-faults`)
+6. Run `python scripts/dev.py test` to verify unit and agent test suites
+7. Run `python scripts/dev.py adversarial` to run attack fixtures X1–X9
+8. Run `make api` and start exploring.
+
+## Core Components
+- **`agent/llm.py`**: Unified multi-provider LLM interface supporting OpenAI-compatible endpoints, Anthropic, FakeLLM, and Cassette Record/Replay with automated fallback and secret scrubbing.
+- **`agent/loop.py`**: Orchestrator executing the 20-phase state machine with budget guards and safety-net nudges.
+- **`tools/policy.py`**: Deterministic policy checker enforcing rules P1–P10, hard limits (≤ 5 files, ≤ 200 lines), and guarded sensitive keys.
+- **`agent/critic/review.py` & `agent/arbiter.py`**: Independent review packet verification and decision escalation table.
+- **`benchmarks/adversarial/`**: Attack fixtures X1–X9 testing metric chasing, sensitive key locking, oversized patches, and hallucinated evidence.
 
 ## Folder Structure
 
 ```text
 .
 ├── agent
-│   ├── critic
-│   │   └── __init__.py
-│   ├── __init__.py
+│   ├── config.py
+│   ├── events.py
+│   ├── llm.py
+│   ├── loop.py
+│   ├── arbiter.py
+│   ├── state.py
 │   ├── solver
-│   │   └── __init__.py
-│   └── state.py
+│   │   ├── prompts.py
+│   │   └── schemas.py
+│   └── critic
+│       ├── prompts.py
+│       ├── schemas.py
+│       └── review.py
 ├── backend
 │   ├── app
 │   │   ├── db.py
 │   │   └── __init__.py
 │   └── __init__.py
 ├── benchmarks
-│   ├── adversarial
-│   ├── gold
-│   ├── papers
-│   └── template
-├── data
-│   └── cassettes
-├── docs
-│   ├── CONTRACTS.md
-│   └── SECURITY.md
-├── frontend
-├── Makefile
-├── PROGRESS.md
-├── README.md
-├── requirements-dev.txt
-├── requirements.txt
+│   ├── adversarial/
+│   ├── baselines/
+│   ├── cases/
+│   ├── gold/
+│   ├── papers/
+│   ├── template/
+│   ├── registry.json
+│   └── run_bench.py
+├── docs/
 ├── sandbox
-│   ├── images
-│   │   ├── Dockerfile.base
-│   │   └── requirements.base.txt
-│   └── __init__.py
+│   ├── cleanup.py
+│   ├── limits.py
+│   ├── manager.py
+│   └── images/
 ├── scripts
-│   └── dev.py
+│   ├── dev.py
+│   ├── export_digits.py
+│   ├── calibrate_benchmark.py
+│   ├── seed_faults.py
+│   ├── make_papers.py
+│   └── run_adversarial.py
 ├── tests
 │   ├── agent
-│   │   └── __init__.py
-│   ├── e2e
-│   │   └── __init__.py
-│   ├── __init__.py
+│   │   ├── fakes.py
+│   │   ├── test_llm.py
+│   │   ├── test_loop.py
+│   │   └── test_critic.py
 │   ├── security
-│   │   └── __init__.py
+│   │   └── test_selftest.py
 │   └── unit
-│       ├── __init__.py
+│       ├── test_arbiter.py
 │       ├── test_compare.py
 │       ├── test_config_audit.py
 │       ├── test_contracts.py
 │       ├── test_errors.py
 │       ├── test_evidence.py
+│       ├── test_gpu_mode.py
 │       ├── test_policy.py
 │       ├── test_results.py
 │       └── test_status.py
@@ -79,9 +101,13 @@
     ├── config_audit.py
     ├── errors.py
     ├── evidence.py
-    ├── __init__.py
+    ├── exec_tools.py
+    ├── paper.py
+    ├── patch.py
     ├── policy.py
+    ├── preflight.py
     ├── registry.py
+    ├── repo.py
     ├── results.py
     └── status.py
 ```

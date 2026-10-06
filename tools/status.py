@@ -100,7 +100,8 @@ def compute_status(state):
         if std_across_seeds > tol_abs or (seeds_run < 3 and state.plan and len(state.plan.seeds) >= 3):
             high_variance = True
             
-        ambiguous = len(state.unresolved_issues) > 0 or len(state.config_diff) > 0
+        has_mismatch = any(d.get("status") == "mismatch" for d in state.config_diff)
+        ambiguous = len(state.unresolved_issues) > 0 or has_mismatch
         
         if high_variance or ambiguous:
             return {

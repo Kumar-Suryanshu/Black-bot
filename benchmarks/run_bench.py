@@ -4,7 +4,10 @@ import sys
 import os
 import csv
 from datetime import datetime
-from baselines.b0_fixed import run_b0
+try:
+    from baselines.b0_fixed import run_b0
+except ImportError:
+    from benchmarks.baselines.b0_fixed import run_b0
 
 class SimulatedApprover:
     def approve(self, policy_passed, critic_verdict, critic_banner):
