@@ -1,35 +1,141 @@
-from agent.state import ProjectState, PatchProposal, Edit
+from agent.state import ProjectState, PatchProposal, Edit, Hypothesis, PaperSetting
 from tools.policy import check
 
+def make_test_state(**kwargs):
+    h = Hypothesis(id="h1", text="test hypo", status="confirmed", error_class="runtime_error", evidence=["E-001"])
+    defaults = dict(
+        project_id="1", benchmark_id="b", repo_commit="c",
+        phase="POLICY_CHECK", budgets={}, claims=[],
+        paper_settings=[PaperSetting(key="learning_rate", value=0.5, source_ref="p.1", source_quote="learning rate = 0.5")],
+        repo_profile={}, allow_high_risk=False,
+        hypotheses=[h],
+        evidence_ids=["E-001"]
+    )
+    defaults.update(kwargs)
+    return ProjectState(**defaults)
+
 def test_policy_deny_list_blocked():
-    state = ProjectState(project_id="1", benchmark_id="b", repo_commit="c", phase="POLICY_CHECK", budgets={}, claims=[], paper_settings=[], repo_profile={}, allow_high_risk=False)
-    prop = PatchProposal(id="p1", hypothesis_id="h1", type="code_typo", rationale="", evidence=[], alternatives_considered=[], edits=[
-        Edit(file="evaluate.py", op="replace_text", new="abc")
-    ])
-    
+    state = make_test_state(allow_high_risk=False)
+    prop = PatchProposal(
+        id="p1", hypothesis_id="h1", type="code_typo", rationale="fix typo",
+        evidence=["E-001"], alternatives_considered=[], edits=[
+            Edit(file="evaluate.py", op="replace_text", new="abc")
+        ]
+    )
     res = check(state, prop)
     assert res["passed"] is False
-    assert "P2" in res["violations"][0]
+    assert any("P2" in v for v in res["violations"])
     
 def test_policy_deny_list_allowed_if_opt_in():
-    state = ProjectState(project_id="1", benchmark_id="b", repo_commit="c", phase="POLICY_CHECK", budgets={}, claims=[], paper_settings=[], repo_profile={}, allow_high_risk=True)
-    prop = PatchProposal(id="p1", hypothesis_id="h1", type="code_typo", rationale="", evidence=[], alternatives_considered=[], edits=[
-        Edit(file="evaluate.py", op="replace_text", new="abc")
-    ])
-    
+    state = make_test_state(allow_high_risk=True)
+    prop = PatchProposal(
+        id="p1", hypothesis_id="h1", type="code_typo", rationale="fix typo",
+        evidence=["E-001"], alternatives_considered=[], edits=[
+            Edit(file="evaluate.py", op="replace_text", new="abc")
+        ]
+    )
     res = check(state, prop)
     assert res["passed"] is True
     assert res["requires_extra_confirm"] is True
     assert res["risk_class"] == "deviation"
     
-def test_policy_size_limit():
-    state = ProjectState(project_id="1", benchmark_id="b", repo_commit="c", phase="POLICY_CHECK", budgets={}, claims=[], paper_settings=[], repo_profile={})
+def test_policy_soft_size_threshold():
+    state = make_test_state()
     edits = []
-    for i in range(25): # > 20 lines
-        edits.append(Edit(file="train.py", op="append_line", new=f"print({i})"))
+    for i in range(25): # > 20 lines (soft threshold) but <= 200 lines
+        edits.append(Edit(file="configs/default.yaml", op="append_line", new=f"comment_{i}: {i}"))
     
-    prop = PatchProposal(id="p1", hypothesis_id="h1", type="code_typo", rationale="", evidence=[], alternatives_considered=[], edits=edits)
+    prop = PatchProposal(
+        id="p1", hypothesis_id="h1", type="config_value", rationale="adjust config",
+        evidence=["E-001"], alternatives_considered=[], edits=edits
+    )
+    res = check(state, prop)
+    assert res["passed"] is True
+    assert "large_patch" in res["flags"]
+    assert res["requires_extra_confirm"] is True
+
+def test_policy_hard_size_limit():
+    state = make_test_state()
+    edits = []
+    for i in range(205): # > 200 lines (hard limit)
+        edits.append(Edit(file="configs/default.yaml", op="append_line", new=f"comment_{i}: {i}"))
     
+    prop = PatchProposal(
+        id="p1", hypothesis_id="h1", type="config_value", rationale="adjust config",
+        evidence=["E-001"], alternatives_considered=[], edits=edits
+    )
     res = check(state, prop)
     assert res["passed"] is False
     assert any("P3" in v for v in res["violations"])
+
+def test_policy_sensitive_key_matching_paper():
+    state = make_test_state(paper_settings=[
+        PaperSetting(key="epochs", value=20, source_ref="p.1", source_quote="epochs = 20")
+    ])
+    prop = PatchProposal(
+        id="p1", hypothesis_id="h1", type="config_value", rationale="match paper epochs",
+        evidence=["E-001"], alternatives_considered=[], edits=[
+            Edit(file="configs/default.yaml", op="replace_text", old="epochs: 10", new="epochs: 20")
+        ]
+    )
+    res = check(state, prop)
+    assert res["passed"] is True
+    assert "sensitive_key" in res["flags"]
+    assert res["requires_extra_confirm"] is True
+
+def test_policy_sensitive_key_not_matching_paper():
+    state = make_test_state(paper_settings=[
+        PaperSetting(key="epochs", value=20, source_ref="p.1", source_quote="epochs = 20")
+    ])
+    prop = PatchProposal(
+        id="p1", hypothesis_id="h1", type="config_value", rationale="tune epochs",
+        evidence=["E-001"], alternatives_considered=[], edits=[
+            Edit(file="configs/default.yaml", op="replace_text", old="epochs: 10", new="epochs: 50")
+        ]
+    )
+    res = check(state, prop)
+    assert res["passed"] is False
+    assert any("sensitive_key_locked" in v for v in res["violations"])
+
+def test_policy_sensitive_key_in_python_code():
+    state = make_test_state(paper_settings=[
+        PaperSetting(key="epochs", value=20, source_ref="p.1", source_quote="epochs = 20")
+    ])
+    prop = PatchProposal(
+        id="p1", hypothesis_id="h1", type="code_typo", rationale="change code epoch literal",
+        evidence=["E-001"], alternatives_considered=[], edits=[
+            Edit(file="train.py", op="replace_text", old="epochs = 10", new="epochs = 20")
+        ]
+    )
+    res = check(state, prop)
+    assert res["passed"] is False
+    assert any("sensitive_key_locked" in v for v in res["violations"])
+
+def test_policy_non_paper_param_with_error_provenance():
+    state = make_test_state()
+    prop = PatchProposal(
+        id="p1", hypothesis_id="h1", type="config_value", rationale="fix non-paper param based on traceback",
+        evidence=["E-001"], alternatives_considered=[], edits=[
+            Edit(file="configs/default.yaml", op="replace_text", old="custom_opt: 1", new="custom_opt: 2")
+        ]
+    )
+    res = check(state, prop)
+    assert res["passed"] is True
+    assert "non_paper_param" in res["flags"]
+    assert res["risk_class"] == "bug_fix"
+    assert res["requires_extra_confirm"] is True
+
+def test_policy_non_paper_param_without_error_provenance():
+    # Hypothesis with config_mismatch error_class cannot justify non-paper param
+    h_mismatch = Hypothesis(id="h2", text="config mismatch", status="confirmed", error_class="config_mismatch", evidence=["E-001"])
+    state = make_test_state(hypotheses=[h_mismatch])
+    prop = PatchProposal(
+        id="p1", hypothesis_id="h2", type="config_value", rationale="tweak custom_opt without error traceback",
+        evidence=["E-001"], alternatives_considered=[], edits=[
+            Edit(file="configs/default.yaml", op="replace_text", old="custom_opt: 1", new="custom_opt: 2")
+        ]
+    )
+    res = check(state, prop)
+    assert res["passed"] is False
+    assert any("no_provenance" in v for v in res["violations"])
+

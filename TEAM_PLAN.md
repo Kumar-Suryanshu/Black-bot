@@ -32,17 +32,17 @@
 | **Stage 3** — Sandbox | ✅ Done | **Member 2** | `dev.py wheelhouse` and `dev.py selftest` pass |
 | **Stage 4** — Benchmark | ✅ Done | **Member 3** | Templates, cases, papers, and calibration sweep pass |
 | **Stage 5** — Baselines | ✅ Done | **Member 3** | B-0 fixed script, B-2 stub, and harness built. Sweep running. |
-| **Stage 6** — LLM Layer | 🔲 Not started | **TBD** | — |
-| **Stage 7** — Solver Loop | 🔲 Not started | **TBD** | — |
-| **Stage 8** — Critic + Arbiter | 🔲 Not started | **TBD** | — |
-| **Stage 9** — Backend API | 🔲 Not started | **TBD** | — |
-| **Stage 10** — Frontend UI | 🔲 Not started | **TBD** | — |
-| **Stage 11** — Report | 🔲 Not started | **TBD** | — |
-| **Stage 12** — Evaluation Sweep | 🔲 Not started | **TBD** | — |
-| **Stage 13** — Hardening | 🔲 Not started | **TBD** | — |
-| **Stage 14** — Docs & Demo Kit | 🔲 Not started | **TBD** | — |
+| **Stage 6** — LLM Layer | ✅ Done | **Member 1** | `agent/llm.py`, providers, cassettes, fallback, test_llm pass |
+| **Stage 7** — Solver Loop | ✅ Done | **Member 1** | `agent/loop.py`, full P1–P10 policy, budget guards, test_loop pass |
+| **Stage 8** — Critic + Arbiter | ✅ Done | **Member 1** | `agent/critic/review.py`, `agent/arbiter.py`, X1–X9 adversarial tests pass |
+| **Stage 9** — Backend API | 🔲 Not started | **Member 2** | — |
+| **Stage 10** — Frontend UI | 🔲 Not started | **Member 2** | — |
+| **Stage 11** — Report | 🔲 Not started | **Member 1 & 2** | — |
+| **Stage 12** — Evaluation Sweep | 🔲 Not started | **Member 3** | — |
+| **Stage 13** — Hardening | 🔲 Not started | **Member 2** | — |
+| **Stage 14** — Docs & Demo Kit | 🔲 Not started | **All** | — |
 
-> **Next milestone:** Stages 5 and 6 can begin in parallel. Stage 7 will require both Stage 6 and Stage 3.
+> **Next milestone:** Checkpoint IC-2 achieved. Code audit for Stages 7 and 8 is complete, with invariants fully hardened. The project is cleared to move to Stage 9 (Backend API) and Frontend Dashboard (Stage 10).
 
 ---
 

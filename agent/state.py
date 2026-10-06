@@ -15,7 +15,7 @@ class Tolerance(BaseModel):
     value: float = 0.01
 
 class Claim(BaseModel):
-    id: str
+    id: str = "C-1"
     statement: str
     metric: str
     dataset: str | None = None
