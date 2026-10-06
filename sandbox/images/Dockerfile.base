@@ -1,0 +1,10 @@
+FROM python:3.11-slim
+
+RUN useradd -m -u 1000 sandbox_user
+
+# Do NOT install PyYAML globally. It is intentionally absent for b2.
+COPY requirements.base.txt /tmp/requirements.base.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.base.txt
+
+WORKDIR /workspace
+USER sandbox_user
