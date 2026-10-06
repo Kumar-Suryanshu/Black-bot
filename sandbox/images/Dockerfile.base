@@ -1,10 +1,11 @@
 FROM python:3.11-slim
 
-RUN useradd -m -u 1000 sandbox_user
+RUN useradd -m -d /tmp -u 1000 runner && \
+    mkdir -p /workspace /wheelhouse && \
+    chown -R runner:runner /workspace /wheelhouse
 
-# Do NOT install PyYAML globally. It is intentionally absent for b2.
 COPY requirements.base.txt /tmp/requirements.base.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.base.txt
 
+USER runner
 WORKDIR /workspace
-USER sandbox_user
