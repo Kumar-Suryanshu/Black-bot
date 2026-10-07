@@ -1,0 +1,550 @@
+import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import {
+  ArrowRight,
+  CheckCircle2,
+  Copy,
+  Check,
+  Send,
+  RotateCcw,
+} from 'lucide-react';
+import { NavbarApp } from '../components/layout/NavbarApp';
+import { Footer } from '../components/layout/Footer';
+import {
+  fetchBenchmarks,
+  createProject,
+  startProject,
+  fetchClaimsDraft,
+  confirmClaims,
+  rejectClaims,
+  fetchProjectState,
+} from '../api/client';
+import type { BenchmarkCase, Claim } from '../api/types';
+
+export const NewProject: React.FC = () => {
+  const navigate = useNavigate();
+
+  // Step: 1 = choose case, 2 = confirm claim
+  const [step, setStep] = useState<1 | 2>(1);
+
+  // Benchmarks list & selection
+  const [cases, setCases] = useState<BenchmarkCase[]>([]);
+  const [selectedCaseId, setSelectedCaseId] = useState<string>('b4_combined');
+  const [allowHighRisk, setAllowHighRisk] = useState<boolean>(false);
+  const [loadingCases, setLoadingCases] = useState<boolean>(true);
+
+  // Active Project & Claim draft state
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [claims, setClaims] = useState<Claim[]>([]);
+  const [paperSettings, setPaperSettings] = useState<any[]>([]);
+  const [runCommand, setRunCommand] = useState<string>('python train.py --config configs/default.yaml');
+  const [loadingClaims, setLoadingClaims] = useState<boolean>(false);
+  const [submittingConfirm, setSubmittingConfirm] = useState<boolean>(false);
+  const [copiedCmd, setCopiedCmd] = useState<boolean>(false);
+  const [showRejectConfirm, setShowRejectConfirm] = useState<boolean>(false);
+
+  useEffect(() => {
+    fetchBenchmarks()
+      .then((data) => {
+        setCases(data);
+        if (data.length > 0) {
+          // Default to b4_combined if available
+          const b4 = data.find((c) => c.id === 'b4_combined');
+          setSelectedCaseId(b4 ? b4.id : data[0].id);
+        }
+      })
+      .catch((err) => console.error('Failed to load benchmarks', err))
+      .finally(() => setLoadingCases(false));
+  }, []);
+
+  // Step 1 -> 2: Start project & poll for CLAIMS_CONFIRM phase
+  const handleStartProject = async () => {
+    if (!selectedCaseId) return;
+    setLoadingClaims(true);
+    setStep(2);
+
+    try {
+      // 1. Create project
+      const { project_id } = await createProject(selectedCaseId, allowHighRisk);
+      setProjectId(project_id);
+
+      // 2. Start worker
+      await startProject(project_id);
+
+      // 3. Poll until CLAIMS_CONFIRM phase reached
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 600));
+        const state = await fetchProjectState(project_id);
+        if (state.phase === 'CLAIMS_CONFIRM') {
+          break;
+        }
+      }
+
+      // 4. Fetch extracted claims draft
+      const draft = await fetchClaimsDraft(project_id);
+      if (draft.claims && draft.claims.length > 0) {
+        setClaims(draft.claims);
+      } else {
+        // Fallback default claim row per Section 10 spec
+        setClaims([
+          {
+            id: 'C-1',
+            statement: 'We achieved a test accuracy of 0.956 ± 0.002 (mean ± std over 5 seeds).',
+            metric: 'test_accuracy',
+            reported: 0.956,
+            tolerance: { type: 'abs', value: 0.01 },
+            result_key: 'test_accuracy_mean',
+            source_ref: 'p.1',
+            source_quote: 'test accuracy of 0.956',
+            primary: true,
+            confirmed_by_human: true,
+          },
+        ]);
+      }
+      setPaperSettings(draft.paper_settings || []);
+      if (draft.command) {
+        setRunCommand(draft.command);
+      }
+    } catch (err) {
+      console.error('Failed to start reproduction flow', err);
+    } finally {
+      setLoadingClaims(false);
+    }
+  };
+
+  // Step 2 Confirm Claims
+  const handleConfirmClaims = async () => {
+    if (!projectId) return;
+    setSubmittingConfirm(true);
+    try {
+      const confirmedClaims = claims.map((c) => ({
+        ...c,
+        confirmed_by_human: true,
+      }));
+      await confirmClaims(projectId, confirmedClaims, runCommand, allowHighRisk);
+      navigate(`/p/${projectId}`);
+    } catch (err) {
+      console.error('Failed to confirm claims', err);
+    } finally {
+      setSubmittingConfirm(false);
+    }
+  };
+
+  // Step 2 Reject Claims
+  const handleRejectClaims = async () => {
+    if (!projectId) return;
+    try {
+      await rejectClaims(projectId);
+      navigate(`/p/${projectId}`);
+    } catch (err) {
+      console.error('Failed to reject claims', err);
+    }
+  };
+
+  const handleCopyCommand = () => {
+    navigator.clipboard.writeText(runCommand);
+    setCopiedCmd(true);
+    setTimeout(() => setCopiedCmd(false), 2000);
+  };
+
+  return (
+    <div className="min-h-screen bg-[#EDE7DB] text-[#1F2A44] flex flex-col font-mono selection:bg-rust/20 selection:text-ink">
+      <NavbarApp />
+
+      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-10 space-y-8">
+        {/* Top Stepper Indicator */}
+        <div className="flex items-center justify-between border-b border-[#CDC5B4] pb-5">
+          <div className="space-y-1">
+            <span className="text-xs font-mono text-rust uppercase tracking-[0.25em] font-bold">
+              NEW REPRODUCTION RUN
+            </span>
+            <h1 className="font-serif text-2xl sm:text-3xl font-normal uppercase tracking-wide text-[#1F2A44]">
+              {step === 1 ? '1. Select Benchmark Case' : '2. Confirm Extracted Claims'}
+            </h1>
+          </div>
+
+          <div className="flex items-center gap-2 font-mono text-xs">
+            <span
+              className={`px-3.5 py-1.5 rounded-sm border uppercase tracking-wider ${
+                step === 1
+                  ? 'bg-[#FAF7F0] text-[#1F2A44] font-bold border-[#CDC5B4] shadow-sm'
+                  : 'bg-[#D9D4C6] text-[#4A5470] border-[#CDC5B4]'
+              }`}
+            >
+              1. Case Selection
+            </span>
+            <span className="text-[#CDC5B4]">→</span>
+            <span
+              className={`px-3.5 py-1.5 rounded-sm border uppercase tracking-wider ${
+                step === 2
+                  ? 'bg-[#FAF7F0] text-[#1F2A44] font-bold border-[#CDC5B4] shadow-sm'
+                  : 'bg-[#D9D4C6] text-[#4A5470] border-[#CDC5B4]'
+              }`}
+            >
+              2. Claim Confirmation
+            </span>
+          </div>
+        </div>
+
+        {/* STEP 1: CHOOSE A BENCHMARK CASE */}
+        {step === 1 && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
+            {/* Left 2 Cols: Case Selection Cards */}
+            <div className="lg:col-span-2 space-y-4">
+              <span className="text-xs font-mono text-[#4A5470] uppercase tracking-[0.2em] font-bold block">
+                Choose a Synthetic Research Benchmark:
+              </span>
+
+              {loadingCases ? (
+                <div className="space-y-3">
+                  {[1, 2, 3, 4, 5].map((i) => (
+                    <div key={i} className="h-24 bg-[#FAF7F0] border border-[#CDC5B4] rounded-xl animate-pulse" />
+                  ))}
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {cases.map((c) => {
+                    const isSelected = selectedCaseId === c.id;
+                    const isDemo = c.id === 'b4_combined';
+
+                    return (
+                      <div
+                        key={c.id}
+                        onClick={() => setSelectedCaseId(c.id)}
+                        className={`p-5 rounded-xl border cursor-pointer transition-all ${
+                          isSelected
+                            ? 'bg-[#FFFFFF] border-2 border-rust shadow-[0_4px_20px_rgba(184,87,47,0.2)] ring-1 ring-rust/50'
+                            : 'bg-[#FAF7F0] border-[#CDC5B4] hover:border-rust/40 hover:bg-[#FFFFFF]'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2.5">
+                              <span className="font-mono text-xs font-bold text-rust">
+                                {c.id}
+                              </span>
+                              <h3 className="font-serif text-lg font-normal uppercase text-[#1F2A44]">
+                                {c.title}
+                              </h3>
+                              {isDemo && (
+                                <span className="px-2 py-0.5 rounded-sm bg-rust text-[#FAF7F0] font-mono text-[10px] font-bold uppercase tracking-wider shadow-sm">
+                                  Recommended for Demo
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs text-[#4A5470] font-sans leading-relaxed">
+                              {c.description}
+                            </p>
+                          </div>
+
+                          <div
+                            className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 ${
+                              isSelected
+                                ? 'border-rust bg-rust text-[#FAF7F0]'
+                                : 'border-[#CDC5B4] bg-[#FAF7F0]'
+                            }`}
+                          >
+                            {isSelected && <CheckCircle2 className="w-4 h-4 fill-current stroke-[#FAF7F0]" />}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Right 1 Col: What Will Happen & Launch Card */}
+            <div className="bg-[#FAF7F0] border border-[#CDC5B4] rounded-xl p-6 space-y-6 shadow-md sticky top-24 font-mono text-xs text-[#1F2A44]">
+              <div className="space-y-1.5">
+                <span className="text-[11px] text-rust uppercase tracking-[0.25em] font-bold block">
+                  Execution Safety Guarantees
+                </span>
+                <h3 className="font-serif text-lg uppercase text-[#1F2A44]">What will happen:</h3>
+              </div>
+
+              {/* Mini 4-step sequence */}
+              <div className="space-y-3 text-[#4A5470] leading-relaxed">
+                <div className="flex items-start gap-2.5">
+                  <span className="text-rust font-bold">1.</span>
+                  <span>Read paper PDF & extract headline accuracy claim</span>
+                </div>
+                <div className="flex items-start gap-2.5">
+                  <span className="text-rust font-bold">2.</span>
+                  <span>Human operator confirms or edits claims on postcard</span>
+                </div>
+                <div className="flex items-start gap-2.5">
+                  <span className="text-rust font-bold">3.</span>
+                  <span>Run code in isolated container (no network access)</span>
+                </div>
+                <div className="flex items-start gap-2.5">
+                  <span className="text-rust font-bold">4.</span>
+                  <span>Review proposed patches & approve before applying</span>
+                </div>
+              </div>
+
+              {/* High risk toggle */}
+              <label className="flex items-start gap-2.5 pt-4 border-t border-[#CDC5B4] text-[#4A5470] cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={allowHighRisk}
+                  onChange={(e) => setAllowHighRisk(e.target.checked)}
+                  className="mt-0.5 rounded accent-rust focus:ring-rust"
+                />
+                <span className="text-[11px] leading-relaxed">
+                  Allow high-risk operations (Relax policy limits; not recommended).
+                </span>
+              </label>
+
+              {/* Start Button: Tactile Rust Button */}
+              <button
+                type="button"
+                onClick={handleStartProject}
+                disabled={!selectedCaseId}
+                className="w-full flex items-center justify-center gap-2 py-3.5 bg-rust hover:bg-[#A34B26] text-[#FAF7F0] font-bold text-xs uppercase tracking-[0.2em] shadow-xl hover:-translate-y-0.5 active:scale-95 transition-all border border-l-4 border-l-[#7A3317] disabled:opacity-40"
+                style={{
+                  clipPath: 'polygon(0% 3px, 2px 0%, calc(100% - 3px) 0%, 100% 2px, 99% calc(100% - 2px), calc(100% - 2px) 100%, 2px 99%, 0% calc(100% - 3px))',
+                }}
+              >
+                <span>Start Reproduction</span>
+                <ArrowRight className="w-4 h-4 stroke-[3] text-[#FAF7F0]" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* STEP 2: CONFIRM THE CLAIM (Field Desk Postcard Motif Reference S2) */}
+        {step === 2 && (
+          <div className="space-y-6">
+            {/* Collapse banner of selected case */}
+            <div className="flex items-center justify-between bg-[#FAF7F0] px-5 py-3 rounded-lg border border-[#CDC5B4] text-xs font-mono text-[#1F2A44] shadow-sm">
+              <div className="flex items-center gap-2">
+                <span className="text-[#4A5470]">Selected Benchmark:</span>
+                <span className="text-rust font-bold uppercase">{selectedCaseId}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setStep(1)}
+                className="text-[#4A5470] hover:text-[#1F2A44] flex items-center gap-1.5 transition-colors border border-[#CDC5B4] px-2.5 py-1 rounded bg-[#E5DFD3]/40 hover:bg-[#E5DFD3]"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Change Case</span>
+              </button>
+            </div>
+
+            {loadingClaims ? (
+              <div className="bg-paper text-ink rounded-xl p-12 border border-kraft shadow-2xl text-center space-y-4">
+                <div className="w-12 h-12 rounded-full border-4 border-rust border-t-transparent animate-spin mx-auto" />
+                <h3 className="font-serif text-xl uppercase tracking-wider text-ink font-normal">
+                  Reading the paper PDF & inspecting the repository...
+                </h3>
+                <p className="text-xs text-ink-soft font-mono">
+                  Extracting verbatim statements, reported metrics, tolerances, and parameter defaults.
+                </p>
+              </div>
+            ) : (
+              /* Postcard Container */
+              <div className="bg-paper text-ink rounded-xl border border-kraft shadow-2xl overflow-hidden relative">
+                {/* Airmail stripe bar at top */}
+                <div className="h-3 w-full bg-[repeating-linear-gradient(45deg,#B8572F,#B8572F_15px,#F1ECE0_15px,#F1ECE0_30px,#2F4F93_30px,#2F4F93_45px,#F1ECE0_45px,#F1ECE0_60px)]" />
+
+                <div className="p-6 md:p-10 space-y-8">
+                  {/* Postcard Header */}
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-kraft/60 pb-6">
+                    <div className="space-y-1">
+                      <span className="text-[11px] font-mono tracking-widest uppercase text-rust font-bold">
+                        PAR AVION · SCIENTIFIC CLAIM SPECIFICATION
+                      </span>
+                      <h2 className="font-serif text-2xl md:text-3xl uppercase tracking-wider text-ink-blue">
+                        Paper Claims & Parameter Ledger
+                      </h2>
+                    </div>
+
+                    {/* Postal Stamp Badge */}
+                    <div className="postage-stamp bg-[#EBE5D6] border border-kraft p-2.5 rounded-sm text-center font-mono text-[10px] text-ink leading-tight select-none">
+                      <div className="font-bold uppercase tracking-wider text-rust">INSPECTION</div>
+                      <div>RERUN POST</div>
+                      <div className="text-[9px] opacity-75">2026.10</div>
+                    </div>
+                  </div>
+
+                  {/* Claims Table */}
+                  <div className="space-y-3 font-mono text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold uppercase tracking-wider text-ink">
+                        1. Extracted Paper Claims (Editable):
+                      </span>
+                      <span className="text-[11px] text-ink-soft">Review reported value & tolerance</span>
+                    </div>
+
+                    <div className="overflow-x-auto bg-[#FFFFFF] rounded-lg border border-kraft shadow-sm">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="border-b border-kraft text-ink-soft text-[11px] bg-[#FAF7F0]">
+                            <th className="py-2.5 px-4">Claim ID</th>
+                            <th className="py-2.5 px-4">Claim Statement</th>
+                            <th className="py-2.5 px-4">Metric Key</th>
+                            <th className="py-2.5 px-4">Reported Value</th>
+                            <th className="py-2.5 px-4">Tolerance</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-kraft/50">
+                          {claims.map((c, idx) => (
+                            <tr key={c.id || idx} className="hover:bg-[#FAF7F0] transition-colors">
+                              <td className="py-3 px-4 font-bold text-rust">{c.id || `C-${idx + 1}`}</td>
+                              <td className="py-3 px-4 max-w-xs font-serif italic text-xs text-ink-blue">
+                                <input
+                                  type="text"
+                                  value={c.statement}
+                                  onChange={(e) => {
+                                    const updated = [...claims];
+                                    updated[idx].statement = e.target.value;
+                                    setClaims(updated);
+                                  }}
+                                  className="w-full bg-[#F4F1E8] border border-kraft rounded px-2 py-1 text-xs text-ink focus:outline-none focus:border-rust"
+                                />
+                              </td>
+                              <td className="py-3 px-4 font-mono text-xs text-ink-soft">
+                                {c.result_key || 'test_accuracy_mean'}
+                              </td>
+                              <td className="py-3 px-4">
+                                <input
+                                  type="number"
+                                  step="0.001"
+                                  value={c.reported}
+                                  onChange={(e) => {
+                                    const updated = [...claims];
+                                    updated[idx].reported = parseFloat(e.target.value);
+                                    setClaims(updated);
+                                  }}
+                                  className="w-24 bg-[#F4F1E8] border border-kraft rounded px-2 py-1 font-mono text-xs font-bold text-ink focus:outline-none focus:border-rust"
+                                />
+                              </td>
+                              <td className="py-3 px-4">
+                                <span className="font-mono text-xs text-ink font-semibold">
+                                  ± {c.tolerance?.value ?? 0.01} ({c.tolerance?.type ?? 'abs'})
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Paper Settings (Read-only verbatim citations) */}
+                  {paperSettings.length > 0 && (
+                    <div className="space-y-3 font-mono text-xs">
+                      <span className="font-bold uppercase tracking-wider text-ink block">
+                        2. Verbatim Paper Settings (Grounded Citations):
+                      </span>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {paperSettings.map((ps, idx) => (
+                          <div
+                            key={idx}
+                            className="bg-[#FFFFFF] p-3.5 rounded-lg border border-kraft space-y-1.5 shadow-sm"
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-ink">{ps.key}</span>
+                              <span className="px-2 py-0.5 rounded bg-[#FAF7F0] border border-kraft/50 text-rust font-bold">
+                                {String(ps.value)}
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-ink-blue italic font-serif">
+                              "{ps.source_quote}"
+                            </div>
+                            <div className="text-[10px] text-ink-soft font-semibold">
+                              Citation: {ps.source_ref}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Run Command Field */}
+                  <div className="space-y-2 font-mono text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold uppercase tracking-wider text-ink">
+                        3. Planned Run Command:
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleCopyCommand}
+                        className="flex items-center gap-1 text-[11px] text-ink-soft hover:text-ink"
+                      >
+                        {copiedCmd ? <Check className="w-3.5 h-3.5 text-ok" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>Copy command</span>
+                      </button>
+                    </div>
+
+                    <input
+                      type="text"
+                      value={runCommand}
+                      onChange={(e) => setRunCommand(e.target.value)}
+                      className="w-full bg-[#FAF7F0] text-[#1F2A44] font-mono text-xs rounded-lg px-4 py-3 border border-[#CDC5B4] focus:outline-none focus:border-rust shadow-inner font-semibold"
+                    />
+                  </div>
+
+                  {/* Actions Bar */}
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-6 border-t border-kraft/60">
+                    <button
+                      type="button"
+                      onClick={() => setShowRejectConfirm(true)}
+                      className="text-xs font-mono text-fail hover:underline"
+                    >
+                      Reject extracted claims & abort
+                    </button>
+
+                    <div className="flex items-center gap-3 w-full sm:w-auto">
+                      <button
+                        type="button"
+                        onClick={handleConfirmClaims}
+                        disabled={submittingConfirm}
+                        className="w-full sm:w-auto flex items-center justify-center gap-2 px-8 py-3.5 rounded-sm bg-rust hover:bg-[#A34B26] text-[#FAF7F0] font-bold text-xs uppercase tracking-[0.2em] border border-l-4 border-l-[#7A3317] shadow-xl transition-all disabled:opacity-50"
+                        style={{
+                          clipPath: 'polygon(0% 2px, 2px 0%, calc(100% - 2px) 0%, 100% 2px, 100% calc(100% - 2px), calc(100% - 2px) 100%, 2px 100%, 0% calc(100% - 2px))',
+                        }}
+                      >
+                        <Send className="w-4 h-4 text-[#FAF7F0]" />
+                        <span>{submittingConfirm ? 'Confirming...' : 'Confirm Claims & Launch Run →'}</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Reject Confirmation Modal */}
+        {showRejectConfirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+            <div className="bg-[#FAF7F0] border border-[#CDC5B4] rounded-xl p-6 max-w-sm w-full space-y-4 shadow-2xl text-[#1F2A44] font-mono text-xs">
+              <h3 className="text-base font-serif uppercase tracking-wide text-[#1F2A44] font-bold">Reject All Claims?</h3>
+              <p className="text-xs text-[#4A5470] leading-relaxed font-sans">
+                Rejecting claims will mark the reproduction run as INCONCLUSIVE with reason "no claim confirmed".
+              </p>
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button
+                  onClick={() => setShowRejectConfirm(false)}
+                  className="px-3.5 py-1.5 rounded border border-[#CDC5B4] text-xs text-[#4A5470] hover:bg-[#E5DFD3] transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleRejectClaims}
+                  className="px-3.5 py-1.5 rounded bg-fail text-white font-bold text-xs uppercase tracking-wider shadow-sm"
+                >
+                  Confirm Reject
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </main>
+
+      <Footer />
+    </div>
+  );
+};

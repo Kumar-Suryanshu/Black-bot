@@ -30,14 +30,30 @@
   - *Gate Run Results:* PASS (`pytest tests/unit/test_arbiter.py tests/agent/test_critic.py` passed; `python scripts/dev.py adversarial` passed; all adversarial fixtures X1–X9 blocked by Policy or Critic; gold patch false-block count = 0 verified)
 - [x] **Stage 9**: Backend — *Owner: TBD (Track B+D)*
   - *Gate Run Results:* PASS (`pytest tests/e2e/test_b4_api.py` passed; B4 driven end-to-end via HTTP: create → start → claims-confirm → approve ×2 → DONE; `status == "REPRODUCED"` verified; SSE stream, worker thread, SQLite WAL, Last-Event-ID resume, and all 13 §14.1 endpoints implemented)
-- [ ] **Stage 10**: Frontend — *Owner: TBD (Track B+D)*
-- [ ] **Stage 11**: Report — *Owner: Track A (generation) + Track B+D (rendering)*
+- [x] **Stage 10**: Frontend — *Owner: Track B+D*
+  - *Gate Run Results:* PASS (`npm run build` passed in 600ms with 0 errors; all routes `/`, `/new`, `/p/:id`, `/p/:id/report`, `/dev/tear`, `*` implemented per `Rerun_Frontend_Spec (1).md`; "Field Desk & Torn Postcard" visual styling S1–S7 with SVG torn paper dividers, Mulberry32 deterministic ragged edge algorithm, Postcard claim confirmation, Live Console with SSE stream, terminal logs, diff view, Critic review card, human approval modal with 9 checks and banners, and certified report with unpatched vs patched chart).
+  - *Polishing & Audit Updates:*
+    - Fixed 3-column desk overflow constraints (`TracePanel`, `Terminal`, `DiffView`) with `min-h-0` and internal scroll containers, resolving overlap with `BudgetBar` ("Step Budget / Patch Budget") and `AttemptsTable` ("Execution Runs & Metric Verification").
+    - Unified the operational console (`/p/:id`), report page (`/p/:id/report`), and project launcher (`/new`) into an archival Kraft paper & ink palette (`#EDE7DB`, `#FAF7F0`, `#CDC5B4`).
+    - Fixed root body background in `index.html` and `index.css` to prevent dark background peeking during scroll.
+- [x] **Stage 11**: Report — *Owner: Track A (generation) + Track B+D (rendering)*
+  - *Gate Run Results:* PASS (Certified reproduction report generation & interactive rendering at `/p/:id/report` with baseline comparison charts, patch provenance with Critic checklist, config audits, and limitation disclosures).
 - [ ] **Stage 12**: Evaluation sweep — *Owner: TBD (Track C)*
 - [ ] **Stage 13**: Hardening & fallbacks — *Owner: TBD (Track B+D)*
 - [ ] **Stage 14**: Docs & demo kit — *Owner: All*
 
 ## Checkpoint Reports
 *(Updated after Stages 3, 7, 10, and 13)*
+
+### After Stage 10 (Frontend & UI Polish Complete)
+- **What works:**
+  - **Landing Page & Torn Paper Engine**: 7-scene narrative journey with Mulberry32 procedural tear seams, sticky viewport stage, rAF animation loop, responsive static fallback, and `/dev/tear` interactive tuner.
+  - **Operational Console (`/p/:id`)**: Real-time SSE event stream, live terminal container streaming with autoscroll and download, unified diff inspector, step/patch budget gauges, execution attempts table, and 9-point Critic review approval modal.
+  - **Postcard Claim Confirmation (`/new`)**: Interactive benchmark selector with paper claim cards, preflight checks, editable target metrics, and run command preview.
+  - **Certified Reproduction Report (`/p/:id/report`)**: Stamp verdict badge, baseline vs observed delta bar chart, applied patch audit, and honest limits disclosure.
+  - **Archival Field Desk Design System**: Consistent warm Kraft paper (`#EDE7DB` / `#FAF7F0`), ink typography (`Libre Caslon Text` & `JetBrains Mono`), rust accents (`#B8572F`), and responsive ergonomics across desktop and laptop screens.
+  - **Test Suite**: 59 passed in 11s across unit, agent, arbiter, loop, and API suites. Frontend TypeScript compilation and production bundle build clean.
+- **What's next:** Stage 12 Evaluation sweep and Stage 14 documentation / final release kit.
 
 ### After Stage 7 & Stage 8 (Checkpoint IC-2 Ready)
 - **What works:**

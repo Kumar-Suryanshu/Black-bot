@@ -1,0 +1,130 @@
+import type {
+  BenchmarkCase,
+  Claim,
+  CriticReview,
+  EvidenceItem,
+  HealthResponse,
+  Patch,
+  ProjectStateSummary,
+  ReportData,
+} from './types';
+
+const BASE_URL = '';
+
+export async function fetchHealth(): Promise<HealthResponse> {
+  const res = await fetch(`${BASE_URL}/api/health`);
+  if (!res.ok) throw new Error(`Health check failed: ${res.statusText}`);
+  return res.json();
+}
+
+export async function fetchBenchmarks(): Promise<BenchmarkCase[]> {
+  const res = await fetch(`${BASE_URL}/api/benchmarks`);
+  if (!res.ok) throw new Error(`Failed to fetch benchmarks: ${res.statusText}`);
+  return res.json();
+}
+
+export async function createProject(benchmarkId: string, allowHighRisk: boolean = false): Promise<{ project_id: string }> {
+  const res = await fetch(`${BASE_URL}/api/projects`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ benchmark_id: benchmarkId, allow_high_risk: allowHighRisk }),
+  });
+  if (!res.ok) throw new Error(`Failed to create project: ${res.statusText}`);
+  return res.json();
+}
+
+export async function startProject(projectId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/projects/${projectId}/start`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error(`Failed to start project: ${res.statusText}`);
+}
+
+export async function fetchProjectState(projectId: string): Promise<ProjectStateSummary> {
+  const res = await fetch(`${BASE_URL}/api/projects/${projectId}`);
+  if (!res.ok) throw new Error(`Failed to fetch project state: ${res.statusText}`);
+  return res.json();
+}
+
+export async function fetchClaimsDraft(projectId: string): Promise<{
+  claims: Claim[];
+  paper_settings: any[];
+  command: string | null;
+}> {
+  const res = await fetch(`${BASE_URL}/api/projects/${projectId}/claims-draft`);
+  if (!res.ok) throw new Error(`Failed to fetch claims draft: ${res.statusText}`);
+  return res.json();
+}
+
+export async function confirmClaims(
+  projectId: string,
+  claims: Claim[],
+  command: string,
+  allowHighRisk: boolean = false
+): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/projects/${projectId}/claims/confirm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ claims, command, allow_high_risk: allowHighRisk }),
+  });
+  if (!res.ok) throw new Error(`Failed to confirm claims: ${res.statusText}`);
+}
+
+export async function rejectClaims(projectId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/projects/${projectId}/claims/reject`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error(`Failed to reject claims: ${res.statusText}`);
+}
+
+export async function fetchPendingApproval(projectId: string): Promise<{
+  approval_id: string;
+  patch: Patch;
+  critic_review: CriticReview | null;
+  banner: string | null;
+  requires_extra_confirm: boolean;
+}> {
+  const res = await fetch(`${BASE_URL}/api/projects/${projectId}/approvals/pending`);
+  if (!res.ok) throw new Error(`Failed to fetch pending approval: ${res.statusText}`);
+  return res.json();
+}
+
+export async function submitApproval(
+  approvalId: string,
+  decision: 'approve' | 'reject',
+  confirmExtra: boolean = false,
+  comment: string = ''
+): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/approvals/${approvalId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ decision, confirm_extra: confirmExtra, comment }),
+  });
+  if (!res.ok) throw new Error(`Failed to submit approval: ${res.statusText}`);
+}
+
+export async function fetchEvidence(projectId: string, evidenceId: string): Promise<EvidenceItem> {
+  const res = await fetch(`${BASE_URL}/api/projects/${projectId}/evidence/${evidenceId}`);
+  if (!res.ok) throw new Error(`Failed to fetch evidence: ${res.statusText}`);
+  return res.json();
+}
+
+export async function fetchRunLog(projectId: string, runN: number): Promise<string> {
+  const res = await fetch(`${BASE_URL}/api/projects/${projectId}/logs/${runN}`);
+  if (!res.ok) throw new Error(`Failed to fetch run log: ${res.statusText}`);
+  const data = await res.json();
+  return data.log || '';
+}
+
+export async function fetchReport(projectId: string): Promise<ReportData> {
+  const res = await fetch(`${BASE_URL}/api/projects/${projectId}/report`);
+  if (!res.ok) throw new Error(`Failed to fetch report: ${res.statusText}`);
+  return res.json();
+}
+
+export async function abortProject(projectId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/projects/${projectId}/abort`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error(`Failed to abort project: ${res.statusText}`);
+}

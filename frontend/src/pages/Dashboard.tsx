@@ -1,0 +1,249 @@
+import React, { useEffect, useState, useCallback } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { NavbarApp } from '../components/layout/NavbarApp';
+import { PhaseBar } from '../components/dashboard/PhaseBar';
+import { BudgetBar } from '../components/dashboard/BudgetBar';
+import { TracePanel } from '../components/dashboard/TracePanel';
+import { Terminal } from '../components/dashboard/Terminal';
+import { DiffView } from '../components/dashboard/DiffView';
+import { AttemptsTable } from '../components/dashboard/AttemptsTable';
+import { ApprovalModal } from '../components/dashboard/ApprovalModal';
+import { EvidenceDrawer } from '../components/ui/EvidenceDrawer';
+import { Footer } from '../components/layout/Footer';
+import { useEventStream } from '../hooks/useEventStream';
+import {
+  fetchProjectState,
+  fetchPendingApproval,
+  submitApproval,
+  fetchRunLog,
+} from '../api/client';
+import type {
+  ProjectStateSummary,
+  Patch,
+  CriticReview,
+  Event,
+} from '../api/types';
+import { ArrowRight, FileCheck } from 'lucide-react';
+
+export const Dashboard: React.FC = () => {
+  const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+
+  const [state, setState] = useState<ProjectStateSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  // Approval modal state
+  const [isApprovalOpen, setIsApprovalOpen] = useState(false);
+  const [currentApprovalId, setCurrentApprovalId] = useState<string>('');
+  const [currentPatch, setCurrentPatch] = useState<Patch | null>(null);
+  const [criticReview, setCriticReview] = useState<CriticReview | null>(null);
+  const [approvalBanner, setApprovalBanner] = useState<string | null>(null);
+  const [requiresExtraConfirm, setRequiresExtraConfirm] = useState(false);
+
+  // Evidence Drawer state
+  const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null);
+
+  // Terminal log stream
+  const [currentLogText, setCurrentLogText] = useState<string>('');
+
+  // Initial load
+  const loadState = useCallback(async () => {
+    if (!id) return;
+    try {
+      const data = await fetchProjectState(id);
+      setState(data);
+
+      // Check if pending approval is waiting
+      if (data.pending?.kind === 'approval') {
+        const appData = await fetchPendingApproval(id);
+        setCurrentApprovalId(appData.approval_id);
+        setCurrentPatch(appData.patch);
+        setCriticReview(appData.critic_review);
+        setApprovalBanner(appData.banner);
+        setRequiresExtraConfirm(appData.requires_extra_confirm);
+        setIsApprovalOpen(true);
+      } else {
+        setIsApprovalOpen(false);
+      }
+
+      // Load active run log
+      const attemptsCount = data.attempts?.length || 0;
+      if (attemptsCount > 0) {
+        const log = await fetchRunLog(id, attemptsCount);
+        setCurrentLogText(log);
+      }
+    } catch (e) {
+      console.error('Failed to load project state', e);
+    } finally {
+      setLoading(false);
+    }
+  }, [id]);
+
+  useEffect(() => {
+    loadState();
+    const interval = setInterval(loadState, 2000);
+    return () => clearInterval(interval);
+  }, [loadState]);
+
+  // Hook into live SSE event stream
+  const handleIncomingEvent = useCallback(
+    (event: Event) => {
+      // If phase changes or approval requested, refresh immediately
+      if (
+        event.type === 'phase_changed' ||
+        event.type === 'approval_requested' ||
+        event.type === 'patch_applied' ||
+        event.type === 'report_ready'
+      ) {
+        loadState();
+      }
+    },
+    [loadState]
+  );
+
+  const { events } = useEventStream({
+    projectId: id || null,
+    onEvent: handleIncomingEvent,
+  });
+
+  // Handle human patch approval
+  const handleApprovePatch = async (comment?: string, confirmExtra?: boolean) => {
+    if (!currentApprovalId) return;
+    try {
+      await submitApproval(currentApprovalId, 'approve', confirmExtra, comment);
+      setIsApprovalOpen(false);
+      await loadState();
+    } catch (e) {
+      console.error('Failed to submit approval', e);
+    }
+  };
+
+  // Handle human patch reject
+  const handleRejectPatch = async (comment?: string) => {
+    if (!currentApprovalId) return;
+    try {
+      await submitApproval(currentApprovalId, 'reject', false, comment);
+      setIsApprovalOpen(false);
+      await loadState();
+    } catch (e) {
+      console.error('Failed to reject patch', e);
+    }
+  };
+
+  if (loading && !state) {
+    return (
+      <div className="min-h-screen bg-[#EDE7DB] text-[#1F2A44] flex flex-col items-center justify-center font-mono">
+        <div className="w-10 h-10 border-4 border-rust border-t-transparent rounded-full animate-spin mb-4" />
+        <p className="text-xs text-[#4A5470] tracking-wider uppercase font-semibold">Connecting to project console...</p>
+      </div>
+    );
+  }
+
+  const isReportReady = state?.phase === 'DONE' || Boolean(state?.final);
+  const activePatch =
+    state?.patches && state.patches.length > 0
+      ? state.patches[state.patches.length - 1]
+      : null;
+
+  return (
+    <div className="min-h-screen bg-[#EDE7DB] text-[#1F2A44] flex flex-col font-mono select-text">
+      {/* App Navbar */}
+      <NavbarApp
+        projectId={id}
+        benchmarkId={state?.benchmark_id}
+        phase={state?.phase}
+        status={state?.final?.status || state?.status}
+        isReportReady={isReportReady}
+        isReplay={events.some((e) => e.type.includes('replay'))}
+      />
+
+      {/* Phase Bar */}
+      <PhaseBar currentPhase={state?.phase || 'INGEST'} />
+
+      {/* Main Operational Console Grid */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 flex flex-col gap-6">
+        {/* Report ready banner alert */}
+        {isReportReady && (
+          <div className="p-4 rounded-xl bg-[#FAF7F0] border-2 border-rust flex items-center justify-between shadow-md">
+            <div className="flex items-center gap-3">
+              <FileCheck className="w-5 h-5 text-rust" />
+              <div>
+                <h4 className="text-sm font-bold text-[#1F2A44] font-mono uppercase tracking-wide">
+                  Reproduction Complete · Verdict:{' '}
+                  <span className="text-rust">{state?.final?.status || state?.status}</span>
+                </h4>
+                <p className="text-xs text-[#4A5470]">
+                  All verification runs, audits, and patches are finalized. Read the complete certified report.
+                </p>
+              </div>
+            </div>
+
+            <button
+              onClick={() => navigate(`/p/${id}/report`)}
+              className="flex items-center gap-2 px-5 py-2.5 rounded-sm bg-rust hover:bg-[#A34B26] text-[#FAF7F0] font-bold text-xs uppercase tracking-wider border border-l-4 border-l-[#7A3317] shadow-md active:scale-95 transition-all"
+            >
+              <span>View Report</span>
+              <ArrowRight className="w-4 h-4 stroke-[3] text-[#FAF7F0]" />
+            </button>
+          </div>
+        )}
+
+        {/* Middle 3-Column Work Desk: Trace | Terminal | Diff */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[500px] min-h-0">
+          {/* Col 1: Trace Panel */}
+          <div className="h-full min-h-0 flex flex-col overflow-hidden">
+            <TracePanel
+              events={events}
+              onSelectEvidence={(eid) => setSelectedEvidenceId(eid)}
+            />
+          </div>
+
+          {/* Col 2: Terminal Logs */}
+          <div className="h-full min-h-0 flex flex-col overflow-hidden">
+            <Terminal
+              projectId={id || ''}
+              totalAttempts={state?.attempts?.length || 0}
+              currentLogText={currentLogText}
+            />
+          </div>
+
+          {/* Col 3: Patch / Diff Panel */}
+          <div className="h-full min-h-0 flex flex-col overflow-hidden">
+            <DiffView patch={activePatch} />
+          </div>
+        </div>
+
+        {/* Bottom Section: Attempts Table & Budget Counters */}
+        <div className="space-y-4 pb-8">
+          <BudgetBar budgets={state?.budgets} />
+          <AttemptsTable attempts={state?.attempts || []} />
+        </div>
+      </main>
+
+      {/* Persistent Kraft Footer */}
+      <Footer />
+
+      {/* Approval Modal (Pop-up on pending approval) */}
+      {currentPatch && (
+        <ApprovalModal
+          isOpen={isApprovalOpen}
+          approvalId={currentApprovalId}
+          patch={currentPatch}
+          criticReview={criticReview}
+          banner={approvalBanner}
+          requiresExtraConfirm={requiresExtraConfirm}
+          onApprove={handleApprovePatch}
+          onReject={handleRejectPatch}
+          onSelectEvidence={(eid) => setSelectedEvidenceId(eid)}
+        />
+      )}
+
+      {/* Slide-over Evidence Drawer */}
+      <EvidenceDrawer
+        projectId={id || ''}
+        evidenceId={selectedEvidenceId}
+        onClose={() => setSelectedEvidenceId(null)}
+      />
+    </div>
+  );
+};

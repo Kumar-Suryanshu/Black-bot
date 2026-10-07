@@ -11,11 +11,13 @@
 - Final reproduction status (`REPRODUCED`, `NOT_REPRODUCED`, `UNABLE_TO_EXECUTE`, `INCONCLUSIVE`) is computed deterministically from measured data.
 
 ## Current Status
-- **Stages 0–9 Completed**: Core scaffolding, testing grounds, AI agent loop (Solver, Critic, Arbiter), and FastAPI backend are fully implemented and tested.
-- **56/59 tests passing** (3 correctly skipped — Docker tests when Docker Desktop is not running).
-- **Next Steps**: Stage 10 (Frontend React Dashboard).
+- **Stages 0–11 Completed**: Core agent architecture, hardened sandboxing, deterministic policy engine, 9-point Critic & Arbiter, FastAPI REST/SSE backend, and the complete React/Vite/Tailwind Frontend with custom 7-scene torn paper scroll animation engine.
+- **59/59 tests passing** across unit, agent, arbiter, loop, security, and API test suites.
+- **Frontend Build**: Zero-warning TypeScript build (`npm run build`) in ~600ms.
 
 ## Quickstart
+
+### 1. Backend Setup
 1. Review `.env.example` and set up your `.env`.
 2. Run `make setup`
 3. Run `make images`
@@ -23,13 +25,21 @@
 5. Run `python scripts/dev.py build-benchmarks` (or `make seed-faults`)
 6. Run `python scripts/dev.py test` to verify unit and agent test suites
 7. Run `python scripts/dev.py adversarial` to run attack fixtures X1–X9
-8. Run `make api` and start exploring.
+8. Run `make api` (or `python -m uvicorn backend.app.main:app --port 8000`)
+
+### 2. Frontend Launch
+1. `cd frontend`
+2. `npm install`
+3. `npm run dev` (runs on `http://localhost:5173`)
+4. Visit `http://localhost:5173` for the landing page with interactive torn-paper scroll animation, or `/new` to initiate a paper verification run.
 
 ## Core Components
 - **`agent/llm.py`**: Unified multi-provider LLM interface supporting Gemini API and Cassette Record/Replay with automated fallback and secret scrubbing.
 - **`agent/loop.py`**: Orchestrator executing the 20-phase state machine with budget guards and safety-net nudges.
 - **`tools/policy.py`**: Deterministic policy checker enforcing rules P1–P10, hard limits (≤ 5 files, ≤ 200 lines), and guarded sensitive keys.
 - **`agent/critic/review.py` & `agent/arbiter.py`**: Independent review packet verification and decision escalation table.
+- **`backend/`**: FastAPI service exposing 13 REST routes and SSE live-tail event bus.
+- **`frontend/`**: React 18 + Vite + Tailwind + GSAP client featuring an archival Field Desk & Kraft Paper design system, Mulberry32 procedural tear seams, live operational console, and certified report.
 - **`benchmarks/adversarial/`**: Attack fixtures X1–X9 testing metric chasing, sensitive key locking, oversized patches, and hallucinated evidence.
 
 ## Folder Structure
@@ -70,6 +80,23 @@
 │   ├── registry.json
 │   └── run_bench.py
 ├── docs/
+├── frontend
+│   ├── src
+│   │   ├── api/
+│   │   ├── components/
+│   │   │   ├── dashboard/
+│   │   │   ├── landing/
+│   │   │   ├── layout/
+│   │   │   └── ui/
+│   │   ├── landing/
+│   │   │   ├── engine/
+│   │   │   ├── illustrations/
+│   │   │   └── scenes/
+│   │   ├── pages/
+│   │   └── styles/
+│   ├── index.html
+│   ├── package.json
+│   └── vite.config.ts
 ├── sandbox
 │   ├── cleanup.py
 │   ├── limits.py
