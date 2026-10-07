@@ -19,9 +19,30 @@ export const ProblemScene: React.FC = () => {
       </div>
 
       {/* Floating Envelope with Letter & Wax Seal (Top Right) */}
+      <style>{`
+        @keyframes envelopeDrift {
+          0%, 100% {
+            transform: rotate(6deg) translate3d(0, 0, 0);
+          }
+          40% {
+            transform: rotate(4deg) translate3d(2px, -5px, 0);
+          }
+          75% {
+            transform: rotate(7.5deg) translate3d(-2px, 3px, 0);
+          }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .envelope-drift {
+            animation: none !important;
+          }
+        }
+      `}</style>
       <div
-        className="absolute right-[8%] top-[8%] z-10 hidden sm:block pointer-events-none select-none"
-        style={{ transform: 'rotate(6deg)' }}
+        className="absolute right-[8%] top-[8%] z-10 hidden sm:block pointer-events-none select-none envelope-drift"
+        style={{
+          animation: 'envelopeDrift 7.2s ease-in-out infinite',
+          transformOrigin: 'center center',
+        }}
       >
         <div className="relative w-32 h-20 bg-[#E8E2D2] border border-kraft shadow-md flex items-center justify-center">
           {/* Letter peeking out */}
