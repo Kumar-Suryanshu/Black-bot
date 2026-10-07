@@ -65,6 +65,7 @@ def test_b1_control_loop(tmp_path):
     assert len(state.patches) == 0
 
 def test_b2_dependency_loop(tmp_path):
+    print("starting test_b2_dependency_loop")
     ws = str(tmp_path / "workspace")
     Path(ws).mkdir(parents=True)
     
@@ -98,6 +99,11 @@ def test_b2_dependency_loop(tmp_path):
         repo_profile={},
         evidence_ids=["E-001"] # Seed evidence from crash
     )
+    
+    # Create mock evidence file for the critic check
+    ev_dir = Path("data") / "runs" / "test_b2" / "evidence"
+    ev_dir.mkdir(parents=True, exist_ok=True)
+    (ev_dir / "E-001_log.txt").write_text("ModuleNotFoundError: No module named 'yaml'\n")
     
     deps = {
         "workspace": ws,

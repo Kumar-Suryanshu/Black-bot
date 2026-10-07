@@ -5,6 +5,16 @@ import pytest
 from pathlib import Path
 
 from sandbox.manager import run_container
+import docker
+
+def is_docker_available():
+    try:
+        docker.from_env().ping()
+        return True
+    except Exception:
+        return False
+
+pytestmark = pytest.mark.skipif(not is_docker_available(), reason="Docker is not available")
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_limits():

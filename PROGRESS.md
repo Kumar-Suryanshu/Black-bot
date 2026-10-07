@@ -28,7 +28,8 @@
   - *Gate Run Results:* PASS (`pytest tests/agent/test_loop.py` passed; `tools/policy.py` completed with P1–P10, hard limits MAX_FILES=5, MAX_CHANGED_LINES=200, guarded sensitive keys; `agent/loop.py` orchestrator verified end-to-end on B1 control, B2 dependency with approval, and budget exhaustion; safety-net nudge verified)
 - [x] **Stage 8**: Critic + Arbiter — *Owner: Member 1 (Track A)*
   - *Gate Run Results:* PASS (`pytest tests/unit/test_arbiter.py tests/agent/test_critic.py` passed; `python scripts/dev.py adversarial` passed; all adversarial fixtures X1–X9 blocked by Policy or Critic; gold patch false-block count = 0 verified)
-- [ ] **Stage 9**: Backend — *Owner: TBD (Track B+D)*
+- [x] **Stage 9**: Backend — *Owner: TBD (Track B+D)*
+  - *Gate Run Results:* PASS (`pytest tests/e2e/test_b4_api.py` passed; B4 driven end-to-end via HTTP: create → start → claims-confirm → approve ×2 → DONE; `status == "REPRODUCED"` verified; SSE stream, worker thread, SQLite WAL, Last-Event-ID resume, and all 13 §14.1 endpoints implemented)
 - [ ] **Stage 10**: Frontend — *Owner: TBD (Track B+D)*
 - [ ] **Stage 11**: Report — *Owner: Track A (generation) + Track B+D (rendering)*
 - [ ] **Stage 12**: Evaluation sweep — *Owner: TBD (Track C)*
@@ -55,8 +56,19 @@
     - `agent/loop.py`: Enforced §7.3 constraint requiring a confirmed hypothesis with valid evidence before `PATCH_PROPOSE`.
     - `agent/loop.py`: Wired missing investigation tools (`read_logs`, `inspect_error`, `run_command`) into `handle_diagnose` with proper sandbox isolation.
     - `agent/loop.py`: Added patch regeneration budgets to `handle_patch_propose` and `handle_policy_check` to strictly allow max 2 retries before escalating to `failed_fixes` per §7.1.
-- **What is incomplete:** Backend FastAPI endpoints (Stage 9), Frontend React dashboard (Stage 10), and Full Report generator/verifier (Stage 11).
-- **What's next:** Phase 4: UI & Reporting (Backend API & Frontend Dashboard).
+- **What is incomplete:** Frontend React dashboard (Stage 10), Report generator/verifier (Stage 11).
+- **What's next:** Phase 4 UI: Stage 10 (Frontend Dashboard) then Stage 11 (Report).
+
+### After Stage 9 (Checkpoint IC-3 Ready)
+- **What works:**
+  - **FastAPI Backend**: Full REST API with all 13 §14.1 endpoints. CORS enabled for Vite dev server.
+  - **SQLite Persistence**: `projects` and `events` tables in WAL mode; `state_json` stores full `ProjectState` round-tripped through Pydantic.
+  - **Worker Thread**: Synchronous orchestrator per project in a daemon thread; pauses when `state.pending` is set; resumed by the human-action API endpoints.
+  - **SSE Streaming**: Thread-safe event bus via `loop.call_soon_threadsafe`; events persisted to DB before push; `Last-Event-ID` header replay for reconnect.
+  - **E2E Gate**: `test_b4_api.py` drives B4 (create → start → claims-confirm → approve ×2 → DONE) via HTTP with FakeLLM + FakeSandbox; asserts `status == "REPRODUCED"` and report fetch.
+  - **Test Suite**: 56 passed, 3 skipped (Docker), 0 failures across all 59 test items.
+- **What is incomplete:** Frontend React dashboard (Stage 10), report generator (Stage 11), `/report.md` and `/report.html` download routes (deferred to Stage 11).
+- **What's next:** Stage 10 (Frontend: React 18 + Vite + TS + Tailwind Dashboard).
 
 ## Blockers (STOP-AND-ASK)
 *(None currently)*
@@ -66,4 +78,4 @@
 
 ---
 
-*Last updated: 2026-10-06*
+*Last updated: 2026-10-07*
