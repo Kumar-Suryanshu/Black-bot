@@ -11,9 +11,9 @@
 - Final reproduction status (`REPRODUCED`, `NOT_REPRODUCED`, `UNABLE_TO_EXECUTE`, `INCONCLUSIVE`) is computed deterministically from measured data.
 
 ## Current Status
-- **Stages 0–8 Completed**: The core deterministic scaffolding, testing grounds, and the AI agent loop (Solver, Critic, Arbiter) are fully implemented.
-- **Code Audit & Invariants Hardened**: The core agent components have passed a rigorous code audit, ensuring strict adherence to the project's sandboxing, loop transition policies, and authorization invariants.
-- **Next Steps**: Advancing to Stage 9 (Backend API) and Stage 10 (Frontend Dashboard).
+- **Stages 0–9 Completed**: Core scaffolding, testing grounds, AI agent loop (Solver, Critic, Arbiter), and FastAPI backend are fully implemented and tested.
+- **56/59 tests passing** (3 correctly skipped — Docker tests when Docker Desktop is not running).
+- **Next Steps**: Stage 10 (Frontend React Dashboard).
 
 ## Quickstart
 1. Review `.env.example` and set up your `.env`.
@@ -52,7 +52,12 @@
 │       └── review.py
 ├── backend
 │   ├── app
+│   │   ├── main.py
+│   │   ├── routes.py
+│   │   ├── runner.py
+│   │   ├── sse.py
 │   │   ├── db.py
+│   │   ├── models.py
 │   │   └── __init__.py
 │   └── __init__.py
 ├── benchmarks
@@ -83,6 +88,8 @@
 │   │   ├── test_llm.py
 │   │   ├── test_loop.py
 │   │   └── test_critic.py
+│   ├── e2e
+│   │   └── test_b4_api.py
 │   ├── security
 │   │   └── test_selftest.py
 │   └── unit

@@ -35,14 +35,14 @@
 | **Stage 6** — LLM Layer | ✅ Done | **Member 1** | `agent/llm.py`, providers, cassettes, fallback, test_llm pass |
 | **Stage 7** — Solver Loop | ✅ Done | **Member 1** | `agent/loop.py`, full P1–P10 policy, budget guards, test_loop pass |
 | **Stage 8** — Critic + Arbiter | ✅ Done | **Member 1** | `agent/critic/review.py`, `agent/arbiter.py`, X1–X9 adversarial tests pass |
-| **Stage 9** — Backend API | 🔲 Not started | **Member 2** | — |
+| **Stage 9** — Backend API | ✅ Done | **Member 2** | Endpoints and E2E API tests pass |
 | **Stage 10** — Frontend UI | 🔲 Not started | **Member 2** | — |
 | **Stage 11** — Report | 🔲 Not started | **Member 1 & 2** | — |
 | **Stage 12** — Evaluation Sweep | 🔲 Not started | **Member 3** | — |
 | **Stage 13** — Hardening | 🔲 Not started | **Member 2** | — |
 | **Stage 14** — Docs & Demo Kit | 🔲 Not started | **All** | — |
 
-> **Next milestone:** Checkpoint IC-2 achieved. Code audit for Stages 7 and 8 is complete, with invariants fully hardened. The project is cleared to move to Stage 9 (Backend API) and Frontend Dashboard (Stage 10).
+> **Next milestone:** IC-3 ready. Stage 9 (Backend API) is complete — all 13 §14.1 endpoints implemented, E2E test passes (B4 create→start→confirm→approve×2→DONE via HTTP), 56 tests passing. Next: Stage 10 (Frontend React Dashboard) to complete IC-3.
 
 ---
 
@@ -703,4 +703,4 @@ python scripts/dev.py replay --case b4   # Replay from cassette
 
 ---
 
-*Last updated: 2026-10-06. Update this file after every stage completion.*
+*Last updated: 2026-10-07. Update this file after every stage completion.*

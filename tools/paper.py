@@ -7,8 +7,8 @@ def extract_text(pdf_path: str) -> Dict[str, Any]:
     marked_lines = []
     
     try:
-        import fitz  # PyMuPDF
-        with fitz.open(pdf_path) as doc:
+        import pymupdf
+        with pymupdf.open(pdf_path) as doc:
             for page_idx, page in enumerate(doc):
                 text = page.get_text()
                 p_lines = text.splitlines()

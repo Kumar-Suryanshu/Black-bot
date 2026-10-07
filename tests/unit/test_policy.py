@@ -2,7 +2,7 @@ from agent.state import ProjectState, PatchProposal, Edit, Hypothesis, PaperSett
 from tools.policy import check
 
 def make_test_state(**kwargs):
-    h = Hypothesis(id="h1", text="test hypo", status="confirmed", error_class="runtime_error", evidence=["E-001"])
+    h = Hypothesis(id="h1", text="test hypo", status="confirmed", error_class="unknown", evidence=["E-001"])
     defaults = dict(
         project_id="1", benchmark_id="b", repo_commit="c",
         phase="POLICY_CHECK", budgets={}, claims=[],

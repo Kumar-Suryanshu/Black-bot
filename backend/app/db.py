@@ -60,3 +60,31 @@ def get_project_state(db_path, project_id):
         from agent.state import ProjectState
         return ProjectState.model_validate_json(row[0])
     return None
+
+def get_events_since(db_path, project_id, last_event_id):
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT id, ts, step, role, type, tool, summary, evidence_ids_json, payload_json
+        FROM events 
+        WHERE project_id = ? AND id > ?
+        ORDER BY id ASC
+    ''', (project_id, last_event_id))
+    rows = cursor.fetchall()
+    conn.close()
+    
+    events = []
+    for row in rows:
+        events.append({
+            "id": row[0],
+            "ts": row[1],
+            "project_id": project_id,
+            "step": row[2],
+            "role": row[3],
+            "type": row[4],
+            "tool": row[5],
+            "summary": row[6],
+            "evidence_ids": json.loads(row[7]) if row[7] else [],
+            "payload": json.loads(row[8]) if row[8] else {}
+        })
+    return events

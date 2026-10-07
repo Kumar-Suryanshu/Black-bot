@@ -82,6 +82,9 @@ def set_sandbox(sb):
     _GLOBAL_SANDBOX = sb
 
 def guard_budgets(state: ProjectState) -> bool:
+    if state.phase in ("STATUS", "REPORT", "REPORT_REVIEW", "DONE"):
+        return False
+        
     steps_used = state.budgets.get("steps_used", 0)
     max_steps = state.budgets.get("max_steps", MAX_STEPS)
     patches_applied = len([p for p in state.patches if p.status == "applied"])
@@ -92,12 +95,14 @@ def guard_budgets(state: ProjectState) -> bool:
         emit_event(state, "system", "budget_warning", f"Budget warning: {steps_used}/{max_steps} steps used (80%)")
 
     if steps_used >= max_steps:
-        state.unresolved_issues.append("budget exhausted: steps limit reached")
+        if "budget exhausted: steps limit reached" not in state.unresolved_issues:
+            state.unresolved_issues.append("budget exhausted: steps limit reached")
         state.phase = "STATUS"
         return True
 
     if patches_applied >= MAX_PATCHES:
-        state.unresolved_issues.append("budget exhausted: max patches applied")
+        if "budget exhausted: max patches applied" not in state.unresolved_issues:
+            state.unresolved_issues.append("budget exhausted: max patches applied")
         state.phase = "STATUS"
         return True
 
@@ -718,4 +723,5 @@ def run_project(state: ProjectState, deps: Optional[dict] = None):
         handler(state, deps_dict)
         if state.pending:
             return  # Paused for human approval or claim confirmation
+
 
