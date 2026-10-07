@@ -7,19 +7,14 @@ import logging
 
 from backend.app.main import app
 from backend.app.db import init_db
-from tests.agent.fakes import FakeLLM, get_fake_script_b4_combined
-from agent.llm import set_fake_llm
 from agent.loop import get_sandbox
 
 def test_b4_api_e2e(monkeypatch):
-    # Use FakeLLM
-    monkeypatch.setenv("LLM_PROVIDER", "fake")
-    monkeypatch.setenv("FAKE_LLM_SCRIPT", "b4_combined")
+    import agent.llm
+    monkeypatch.setattr(agent.llm, "LLM_MODE", "replay")
+    # Use cassette replay mode
+    monkeypatch.setenv("LLM_MODE", "replay")
     monkeypatch.setenv("SANDBOX_TYPE", "fake")
-    
-    # Actually register the fake LLM for this process (shared with worker threads)
-    fake_llm = FakeLLM(get_fake_script_b4_combined())
-    set_fake_llm(fake_llm)
     
     sb = get_sandbox()
     sb.register("b4_combined", 1, 1, "ModuleNotFoundError: No module named 'yaml'", {})

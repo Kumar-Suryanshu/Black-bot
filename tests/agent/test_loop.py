@@ -4,10 +4,11 @@ from pathlib import Path
 
 from agent.state import ProjectState, Claim, Approval
 from agent.loop import run_project, set_sandbox, FakeSandbox
-from agent.llm import set_fake_llm
-from tests.agent.fakes import FakeLLM, get_fake_script_b1, get_fake_script_b2
 
-def test_b1_control_loop(tmp_path):
+def test_b1_control_loop(tmp_path, monkeypatch):
+    import agent.llm
+    monkeypatch.setattr(agent.llm, "LLM_MODE", "replay")
+    monkeypatch.setenv("LLM_MODE", "replay")
     ws = str(tmp_path / "workspace")
     Path(ws).mkdir(parents=True)
     
@@ -15,9 +16,6 @@ def test_b1_control_loop(tmp_path):
     (Path(ws) / "configs").mkdir(parents=True)
     (Path(ws) / "configs" / "default.yaml").write_text("learning_rate: 0.5\nepochs: 20\nseeds: [0, 1, 2, 3, 4]\n")
     (Path(ws) / "train.py").write_text("print('training...')\n")
-    
-    fake_llm = FakeLLM(get_fake_script_b1())
-    set_fake_llm(fake_llm)
     
     sb = FakeSandbox()
     # Run 1 succeeds with accuracy 0.956
@@ -64,7 +62,10 @@ def test_b1_control_loop(tmp_path):
     assert state.final["status"] == "REPRODUCED"
     assert len(state.patches) == 0
 
-def test_b2_dependency_loop(tmp_path):
+def test_b2_dependency_loop(tmp_path, monkeypatch):
+    import agent.llm
+    monkeypatch.setattr(agent.llm, "LLM_MODE", "replay")
+    monkeypatch.setenv("LLM_MODE", "replay")
     print("starting test_b2_dependency_loop")
     ws = str(tmp_path / "workspace")
     Path(ws).mkdir(parents=True)
@@ -73,9 +74,6 @@ def test_b2_dependency_loop(tmp_path):
     (Path(ws) / "configs" / "default.yaml").write_text("learning_rate: 0.5\n")
     (Path(ws) / "requirements.txt").write_text("numpy==1.26.4\n")
     (Path(ws) / "train.py").write_text("import yaml\n")
-    
-    fake_llm = FakeLLM(get_fake_script_b2())
-    set_fake_llm(fake_llm)
     
     sb = FakeSandbox()
     # Run 1 crashes: ModuleNotFoundError
@@ -140,7 +138,10 @@ def test_b2_dependency_loop(tmp_path):
     assert state.final["status"] == "REPRODUCED"
     assert len([p for p in state.patches if p.status == "applied"]) == 1
 
-def test_budget_exhaustion(tmp_path):
+def test_budget_exhaustion(tmp_path, monkeypatch):
+    import agent.llm
+    monkeypatch.setattr(agent.llm, "LLM_MODE", "replay")
+    monkeypatch.setenv("LLM_MODE", "replay")
     ws = str(tmp_path / "workspace")
     Path(ws).mkdir(parents=True)
     
@@ -161,29 +162,28 @@ def test_budget_exhaustion(tmp_path):
     assert any("budget exhausted" in issue for issue in state.unresolved_issues)
     assert state.phase == "DONE"
 
-def test_hypothesis_unrecorded_evidence_rejected(tmp_path):
+from unittest.mock import patch
+import json
+
+@patch("agent.llm.execute_provider_request")
+def test_hypothesis_unrecorded_evidence_rejected(mock_execute, tmp_path):
+    mock_execute.return_value = json.dumps({
+        "reason": "Test diagnosis",
+        "hypotheses": [{
+            "id": "H-1",
+            "text": "Hypothesis citing non-existent evidence",
+            "status": "confirmed",
+            "evidence": ["E-999"],
+            "tested_with": [],
+            "error_class": "runtime_error"
+        }],
+        "next_action": {
+            "tool": "conclude_no_cause",
+            "args": {}
+        }
+    })
     ws = str(tmp_path / "workspace")
     Path(ws).mkdir(parents=True)
-    
-    # Solver proposes hypothesis citing non-existent E-999
-    script = [
-        ("solver", "diagnose_step", {
-            "reason": "Test diagnosis",
-            "hypotheses": [{
-                "id": "H-1",
-                "text": "Hypothesis citing non-existent evidence",
-                "status": "confirmed",
-                "evidence": ["E-999"],
-                "tested_with": [],
-                "error_class": "runtime_error"
-            }],
-            "next_action": {
-                "tool": "conclude_no_cause",
-                "args": {}
-            }
-        })
-    ]
-    set_fake_llm(FakeLLM(script))
     
     state = ProjectState(
         project_id="test_hypo_ev",

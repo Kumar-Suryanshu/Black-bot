@@ -2,6 +2,9 @@
 import argparse
 import subprocess
 import sys
+from dotenv import load_dotenv
+
+load_dotenv()
 
 def run_cmd(cmd):
     print(f"Running: {cmd}")

@@ -1,8 +1,8 @@
 import pytest
+from unittest.mock import patch
+import json
 from agent.state import ProjectState, PatchProposal, Hypothesis, Edit, PaperSetting
 from agent.critic.review import build_review_packet, review_patch
-from tests.agent.fakes import FakeLLM
-from agent.llm import set_fake_llm
 
 def make_critic_test_state():
     h = Hypothesis(id="H-1", text="Missing dependency PyYAML", status="confirmed")
@@ -37,7 +37,8 @@ def test_critic_packet_building():
     assert packet["hypothesis"] == "Missing dependency PyYAML"
     assert len(packet["paper_settings"]) == 1
 
-def test_critic_verdict_override_critical_check_failed():
+@patch("agent.llm.execute_provider_request")
+def test_critic_verdict_override_critical_check_failed(mock_execute):
     state = make_critic_test_state()
     patch = PatchProposal(
         id="P-1",
@@ -50,8 +51,8 @@ def test_critic_verdict_override_critical_check_failed():
     )
     
     # Critic attempts to say SUPPORTED even though not_metric_chasing is False!
-    fake_critic = FakeLLM([
-        ("critic", "patch_review", {
+    mock_execute.side_effect = [
+        json.dumps({
             "id": "R-1",
             "patch_id": "P-1",
             "round": 1,
@@ -72,17 +73,8 @@ def test_critic_verdict_override_critical_check_failed():
             "required_changes": [],
             "confidence": "high",
             "model": "fake"
-        })
-    ])
-    set_fake_llm(fake_critic)
-    
-    # Round 1: Code must override SUPPORTED to NEEDS_REVISION
-    rev1 = review_patch(state, patch, round_num=1)
-    assert rev1.verdict == "NEEDS_REVISION"
-    
-    # Round 2: Code must override to BLOCK
-    set_fake_llm(FakeLLM([
-        ("critic", "patch_review", {
+        }),
+        json.dumps({
             "id": "R-2",
             "patch_id": "P-1",
             "round": 2,
@@ -104,7 +96,13 @@ def test_critic_verdict_override_critical_check_failed():
             "confidence": "high",
             "model": "fake"
         })
-    ]))
+    ]
+    
+    # Round 1: Code must override SUPPORTED to NEEDS_REVISION
+    rev1 = review_patch(state, patch, round_num=1)
+    assert rev1.verdict == "NEEDS_REVISION"
+    
+    # Round 2: Code must override to BLOCK
     rev2 = review_patch(state, patch, round_num=2)
     assert rev2.verdict == "BLOCK"
 

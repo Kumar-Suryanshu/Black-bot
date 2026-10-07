@@ -17,20 +17,20 @@ LARGE_PATCH_LINES = int(os.getenv("LARGE_PATCH_LINES", "20"))
 LOG_CAP_BYTES = int(os.getenv("LOG_CAP_BYTES", "2000000"))
 
 # Provider settings
-SOLVER_PROVIDER = os.getenv("SOLVER_PROVIDER", "fake")
-SOLVER_MODEL = os.getenv("SOLVER_MODEL", "gpt-4o-mini")
-SOLVER_BASE_URL = os.getenv("SOLVER_BASE_URL", "http://localhost:11434/v1")
+SOLVER_PROVIDER = os.getenv("SOLVER_PROVIDER", "gemini")
+SOLVER_MODEL = os.getenv("SOLVER_MODEL", "gemini-3.8-flash")
+SOLVER_BASE_URL = os.getenv("SOLVER_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/gemini")
 SOLVER_API_KEY = os.getenv("SOLVER_API_KEY", "")
 
-CRITIC_PROVIDER = os.getenv("CRITIC_PROVIDER", "fake")
-CRITIC_MODEL = os.getenv("CRITIC_MODEL", "gpt-4o-mini")
-CRITIC_BASE_URL = os.getenv("CRITIC_BASE_URL", "http://localhost:11434/v1")
+CRITIC_PROVIDER = os.getenv("CRITIC_PROVIDER", "gemini")
+CRITIC_MODEL = os.getenv("CRITIC_MODEL", "gemini-3.8-flash")
+CRITIC_BASE_URL = os.getenv("CRITIC_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/gemini")
 CRITIC_API_KEY = os.getenv("CRITIC_API_KEY", "")
 
-FALLBACK_PROVIDER = os.getenv("FALLBACK_PROVIDER", "openai_compat")
-FALLBACK_MODEL = os.getenv("FALLBACK_MODEL", "llama3")
-FALLBACK_BASE_URL = os.getenv("FALLBACK_BASE_URL", "http://localhost:11434/v1")
-FALLBACK_API_KEY = os.getenv("FALLBACK_API_KEY", "ollama")
+FALLBACK_PROVIDER = os.getenv("FALLBACK_PROVIDER", "gemini")
+FALLBACK_MODEL = os.getenv("FALLBACK_MODEL", "gemini-3.8-flash")
+FALLBACK_BASE_URL = os.getenv("FALLBACK_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/gemini")
+FALLBACK_API_KEY = os.getenv("FALLBACK_API_KEY", "")
 
 CASSETTE_DIR = os.getenv("CASSETTE_DIR", "data/cassettes")
 LLM_MODE = os.getenv("LLM_MODE", "live")  # live | record | replay
