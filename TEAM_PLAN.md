@@ -36,13 +36,13 @@
 | **Stage 7** — Solver Loop | ✅ Done | **Member 1** | `agent/loop.py`, full P1–P10 policy, budget guards, test_loop pass |
 | **Stage 8** — Critic + Arbiter | ✅ Done | **Member 1** | `agent/critic/review.py`, `agent/arbiter.py`, X1–X9 adversarial tests pass |
 | **Stage 9** — Backend API | ✅ Done | **Member 2** | Endpoints and E2E API tests pass |
-| **Stage 10** — Frontend UI | 🔲 Not started | **Member 2** | — |
-| **Stage 11** — Report | 🔲 Not started | **Member 1 & 2** | — |
+| **Stage 10** — Frontend UI | ✅ Done | **Member 2** | React 18, Vite, Tailwind, 7-scene torn paper scroll engine, live console, approval modal |
+| **Stage 11** — Report | ✅ Done | **Member 1 & 2** | Report generator & verifier V1–V7, comparison chart data, multi-format exports, interactive report viewer |
 | **Stage 12** — Evaluation Sweep | 🔲 Not started | **Member 3** | — |
 | **Stage 13** — Hardening | 🔲 Not started | **Member 2** | — |
 | **Stage 14** — Docs & Demo Kit | 🔲 Not started | **All** | — |
 
-> **Next milestone:** IC-3 ready. Stage 9 (Backend API) is complete — all 13 §14.1 endpoints implemented, E2E test passes (B4 create→start→confirm→approve×2→DONE via HTTP), 56 tests passing. Next: Stage 10 (Frontend React Dashboard) to complete IC-3.
+> **Next milestone:** IC-4 ready. Stages 10 (Frontend Dashboard) and 11 (Report Generation & Verification Engine) are complete. The complete application runs end-to-end with UI, human-in-the-loop approvals, deterministic policy enforcement, and certified reproduction reports. Next: Stage 12 (Evaluation Sweep across benchmarks B1–B5).
 
 ---
 
@@ -402,14 +402,14 @@ npm run build   # succeeds
 ```
 
 **Deliverables checklist:**
-- [ ] Vite + React + TS + Tailwind project in `frontend/`
-- [ ] New Project page with benchmark selector
-- [ ] Claim confirmation table (editable)
-- [ ] Dashboard with phase bar, trace panel, terminal, diff viewer
-- [ ] Approval modal with Critic panel, banners, extra confirmation
-- [ ] Report page with charts, status badge, evidence drawer
-- [ ] `useEventStream` hook with SSE + `Last-Event-ID`
-- [ ] Fonts: Inter + JetBrains Mono (bundled, no CDN)
+- [x] Vite + React + TS + Tailwind project in `frontend/`
+- [x] New Project page with benchmark selector
+- [x] Claim confirmation table (editable)
+- [x] Dashboard with phase bar, trace panel, terminal, diff viewer
+- [x] Approval modal with Critic panel, banners, extra confirmation
+- [x] Report page with charts, status badge, evidence drawer
+- [x] `useEventStream` hook with SSE + `Last-Event-ID`
+- [x] Fonts: Libre Caslon Text + JetBrains Mono
 
 ---
 
@@ -427,6 +427,14 @@ npm run build   # succeeds
 pytest tests/unit/test_report_verifier.py   # green
 # Corrupted statement is caught and listed under "Statements removed"
 ```
+
+**Deliverables checklist:**
+- [x] `tools/report.py` with placeholder interpolation `resolve_placeholders()`
+- [x] Deterministic verifier `verify_report_claims()` enforcing rules V1–V7
+- [x] `generate_report()` with unpatched vs patched comparisons and chart points
+- [x] FastAPI export endpoints: `/api/projects/{id}/report`, `.md`, and `.html`
+- [x] Unit test suite `tests/unit/test_report_verifier.py` (9/9 pass)
+- [x] Interactive Report page in React (`frontend/src/pages/Report.tsx`) with Stamp, Recharts, and export buttons
 
 ---
 

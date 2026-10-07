@@ -9,3 +9,5 @@ node_modules/
 pytest_out.txt
 pytest_out2.txt
 pytest_out3.txt
+powershell.cmd
+frontend/powershell.cmd

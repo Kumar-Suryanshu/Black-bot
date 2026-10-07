@@ -41,7 +41,13 @@ Rules:
 7. Output exactly ONE JSON object matching the schema. No markdown fences, no text outside the JSON.
 """
 
+# Global registry for active FakeLLM instance in test environments
+_ACTIVE_FAKE_LLM = None
 _EVENT_LISTENER: Optional[Callable[[str, dict], None]] = None
+
+def set_fake_llm(fake_instance):
+    global _ACTIVE_FAKE_LLM
+    _ACTIVE_FAKE_LLM = fake_instance
 
 def set_event_listener(listener: Optional[Callable[[str, dict], None]]):
     global _EVENT_LISTENER
@@ -90,7 +96,12 @@ def get_cassette_key(role: str, mode: str, payload: dict, model: str) -> str:
     return hashlib.sha256(key_src.encode("utf-8")).hexdigest()
 
 def execute_provider_request(provider: str, model: str, base_url: str, api_key: str, messages: list) -> str:
-    if provider == "gemini":
+    if provider == "fake":
+        if _ACTIVE_FAKE_LLM is None:
+            raise RuntimeError("Fake provider selected but no active FakeLLM registered.")
+        return _ACTIVE_FAKE_LLM.respond(messages)
+
+    elif provider == "gemini":
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         payload = {
             "model": model,
@@ -108,6 +119,47 @@ def execute_provider_request(provider: str, model: str, base_url: str, api_key: 
             resp.raise_for_status()
             data = resp.json()
             return data["choices"][0]["message"]["content"]
+
+    elif provider == "openai_compat":
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.0,
+            "response_format": {"type": "json_object"}
+        }
+        with httpx.Client(timeout=60.0) as client:
+            resp = client.post(f"{base_url.rstrip('/')}/chat/completions", json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            return data["choices"][0]["message"]["content"]
+
+    elif provider == "anthropic":
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json"
+        }
+        system_text = ""
+        user_messages = []
+        for m in messages:
+            if m["role"] == "system":
+                system_text += m["content"] + "\n"
+            else:
+                user_messages.append(m)
+                
+        payload = {
+            "model": model,
+            "system": system_text,
+            "messages": user_messages,
+            "max_tokens": 4096,
+            "temperature": 0.0
+        }
+        with httpx.Client(timeout=60.0) as client:
+            resp = client.post("https://api.anthropic.com/v1/messages", json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            return data["content"][0]["text"]
             
     raise ValueError(f"Unknown LLM provider: {provider}")
 
@@ -127,6 +179,9 @@ def call(
     system_preamble = SOLVER_PREAMBLE if role == "solver" else CRITIC_PREAMBLE
     user_prompt = f"Mode: {mode}\nPayload:\n{json.dumps(wrap_untrusted(payload), indent=2)}"
     
+    current_llm_mode = LLM_MODE
+    current_cassette_dir = CASSETTE_DIR
+    
     # Configure provider & model
     if role == "solver":
         provider = SOLVER_PROVIDER
@@ -139,20 +194,32 @@ def call(
         base_url = CRITIC_BASE_URL
         api_key = CRITIC_API_KEY
         
+    if _ACTIVE_FAKE_LLM is not None:
+        provider = "fake"
+        
     cassette_key = get_cassette_key(role, mode, payload, model)
-    cassette_path = Path(CASSETTE_DIR) / benchmark_id / f"{cassette_key}.json"
+    cassette_path = Path(current_cassette_dir) / benchmark_id / f"{cassette_key}.json"
     
     # Replay check
-    if LLM_MODE == "replay":
-        if not cassette_path.exists():
+    if current_llm_mode == "replay":
+        if cassette_path.exists():
+            with open(cassette_path, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            raw_output = saved["response_text"]
+            if _EVENT_LISTENER:
+                _EVENT_LISTENER("replay_notice", {"key": cassette_key, "role": role, "mode": mode})
+            parsed_dict = extract_json(raw_output)
+            return out_model.model_validate(parsed_dict)
+        elif _ACTIVE_FAKE_LLM is not None:
+            messages = [
+                {"role": "system", "content": system_preamble},
+                {"role": "user", "content": user_prompt}
+            ]
+            raw_output = _ACTIVE_FAKE_LLM.respond(messages)
+            parsed_dict = extract_json(raw_output)
+            return out_model.model_validate(parsed_dict)
+        else:
             raise RuntimeError(f"Cassette miss in replay mode for key {cassette_key} ({role}:{mode})")
-        with open(cassette_path, "r", encoding="utf-8") as f:
-            saved = json.load(f)
-        raw_output = saved["response_text"]
-        if _EVENT_LISTENER:
-            _EVENT_LISTENER("replay_notice", {"key": cassette_key, "role": role, "mode": mode})
-        parsed_dict = extract_json(raw_output)
-        return out_model.model_validate(parsed_dict)
 
     messages = [
         {"role": "system", "content": system_preamble},
@@ -177,17 +244,20 @@ def call(
     try:
         raw_response = attempt_llm_call(provider, model, base_url, api_key)
     except Exception as e:
-        # Try fallback provider
-        if _EVENT_LISTENER:
-            _EVENT_LISTENER("llm_fallback", {
-                "from_provider": provider,
-                "to_provider": FALLBACK_PROVIDER,
-                "error": scrub_secrets(str(e))
-            })
-        try:
-            raw_response = attempt_llm_call(FALLBACK_PROVIDER, FALLBACK_MODEL, FALLBACK_BASE_URL, FALLBACK_API_KEY)
-        except Exception as fallback_e:
-            raise RuntimeError(f"Both primary ({provider}) and fallback ({FALLBACK_PROVIDER}) failed: {scrub_secrets(str(fallback_e))}")
+        if provider != "fake":
+            # Try fallback provider
+            if _EVENT_LISTENER:
+                _EVENT_LISTENER("llm_fallback", {
+                    "from_provider": provider,
+                    "to_provider": FALLBACK_PROVIDER,
+                    "error": scrub_secrets(str(e))
+                })
+            try:
+                raw_response = attempt_llm_call(FALLBACK_PROVIDER, FALLBACK_MODEL, FALLBACK_BASE_URL, FALLBACK_API_KEY)
+            except Exception as fallback_e:
+                raise RuntimeError(f"Both primary ({provider}) and fallback ({FALLBACK_PROVIDER}) failed: {scrub_secrets(str(fallback_e))}")
+        else:
+            raise e
 
     # Parse and validate JSON
     validated_obj = None
@@ -212,7 +282,7 @@ def call(
             raise LLMOutputInvalid(f"Failed schema validation after re-prompt: {scrub_secrets(str(final_err))}")
 
     # Record cassette if requested (only after successful schema validation)
-    if LLM_MODE == "record":
+    if current_llm_mode == "record":
         cassette_path.parent.mkdir(parents=True, exist_ok=True)
         with open(cassette_path, "w", encoding="utf-8") as f:
             json.dump({

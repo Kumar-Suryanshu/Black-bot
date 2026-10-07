@@ -28,3 +28,22 @@
   - Ink on Paper: 12.6:1 (WCAG AAA pass)
   - Ink on Kraft Light: 9.6:1 (WCAG AAA pass)
   - Rust Ink on Paper: 6.4:1 (WCAG AA pass)
+
+## 5. Report System & Verification Engine (Stage 11 / Step 2)
+- **Deterministic Verifier (Rules V1–V7)**:
+  - Solver LLM generated statements cannot be trusted blindly. Plain Python verifier code enforces rules V1–V7 before any statement reaches the user or final report:
+    - **V1 (Placeholder Resolution)**: Catches any unresolved `{{...}}` tokens.
+    - **V2 (Numerical Fidelity)**: Numbers cited in claims must strictly match observed execution metrics or paper target values within tolerance.
+    - **V3 (Accusatory Prevention)**: Accusatory words (e.g., *hallucinated*, *fraud*, *fabricated*) are strictly stripped.
+    - **V4 (Status Consistency)**: Cannot assert reproduction succeeded if status is `FAILED` or outside tolerance.
+    - **V5 (Evidence Grounding)**: Findings must cite recorded evidence IDs (`E-xxx`) existing in the project run ledger.
+    - **V6 (Hypothesis Provenance)**: Causes must correspond to verified hypotheses.
+    - **V7 (Confirmed Causality)**: A cause statement cannot claim `confirmed` status without backing confirmed hypotheses.
+  - Invalid statements are moved to `statements_removed` with recorded violation rationale, preserving full audit transparency.
+- **Unpatched vs. Patched Headline Metric Contract**:
+  - `generate_report` automatically packages both Run 1 (unpatched baseline) and final patched Run N metrics, enabling the frontend `ReportChart` and Recharts comparison to render headline comparison bars without separate calculations.
+- **Multi-Format Exports**:
+  - Direct REST endpoint `/api/projects/{id}/report` provides the full JSON payload.
+  - Download endpoint `/api/projects/{id}/report.md` provides clean GitHub-compatible Markdown.
+  - Download endpoint `/api/projects/{id}/report.html` provides a self-contained, printable, styled HTML document with embedded CSS.
+

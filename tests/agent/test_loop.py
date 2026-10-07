@@ -7,6 +7,10 @@ from agent.loop import run_project, set_sandbox, FakeSandbox
 
 def test_b1_control_loop(tmp_path, monkeypatch):
     import agent.llm
+    from tests.agent.fakes import FakeLLM, get_fake_script_b1
+    from agent.llm import set_fake_llm
+    fake_llm = FakeLLM(get_fake_script_b1())
+    set_fake_llm(fake_llm)
     monkeypatch.setattr(agent.llm, "LLM_MODE", "replay")
     monkeypatch.setenv("LLM_MODE", "replay")
     ws = str(tmp_path / "workspace")
@@ -64,6 +68,10 @@ def test_b1_control_loop(tmp_path, monkeypatch):
 
 def test_b2_dependency_loop(tmp_path, monkeypatch):
     import agent.llm
+    from tests.agent.fakes import FakeLLM, get_fake_script_b2
+    from agent.llm import set_fake_llm
+    fake_llm = FakeLLM(get_fake_script_b2())
+    set_fake_llm(fake_llm)
     monkeypatch.setattr(agent.llm, "LLM_MODE", "replay")
     monkeypatch.setenv("LLM_MODE", "replay")
     print("starting test_b2_dependency_loop")

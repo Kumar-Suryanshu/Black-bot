@@ -18,17 +18,17 @@ LOG_CAP_BYTES = int(os.getenv("LOG_CAP_BYTES", "2000000"))
 
 # Provider settings
 SOLVER_PROVIDER = os.getenv("SOLVER_PROVIDER", "gemini")
-SOLVER_MODEL = os.getenv("SOLVER_MODEL", "gemini-3.8-flash")
+SOLVER_MODEL = os.getenv("SOLVER_MODEL", "gemini-3.1-flash-lite")
 SOLVER_BASE_URL = os.getenv("SOLVER_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/gemini")
 SOLVER_API_KEY = os.getenv("SOLVER_API_KEY", "")
 
 CRITIC_PROVIDER = os.getenv("CRITIC_PROVIDER", "gemini")
-CRITIC_MODEL = os.getenv("CRITIC_MODEL", "gemini-3.8-flash")
+CRITIC_MODEL = os.getenv("CRITIC_MODEL", "gemini-3.1-flash-lite")
 CRITIC_BASE_URL = os.getenv("CRITIC_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/gemini")
 CRITIC_API_KEY = os.getenv("CRITIC_API_KEY", "")
 
 FALLBACK_PROVIDER = os.getenv("FALLBACK_PROVIDER", "gemini")
-FALLBACK_MODEL = os.getenv("FALLBACK_MODEL", "gemini-3.8-flash")
+FALLBACK_MODEL = os.getenv("FALLBACK_MODEL", "gemini-3.1-flash-lite")
 FALLBACK_BASE_URL = os.getenv("FALLBACK_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/gemini")
 FALLBACK_API_KEY = os.getenv("FALLBACK_API_KEY", "")
 

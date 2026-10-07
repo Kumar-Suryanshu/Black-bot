@@ -38,6 +38,8 @@ from tools.repo import inspect_repository
 from tools.paper import extract_text, verify_quote as verify_paper_quote
 from tools.preflight import preflight_check
 from tools.exec_tools import query_package_index
+from tools.report import generate_report
+from agent.critic.schemas import ReportReviewOutput
 
 class FakeSandbox:
     """Mock sandbox execution for deterministic unit & agent testing."""
@@ -664,6 +666,7 @@ def handle_status(state: ProjectState, deps: dict):
 
 def handle_report(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
+    raw_statements = []
     try:
         rep_out = llm_call(
             "solver", "write_report",
@@ -677,14 +680,43 @@ def handle_report(state: ProjectState, deps: dict):
             benchmark_id=state.benchmark_id
         )
         if rep_out and hasattr(rep_out, "statements"):
+            raw_statements = rep_out.statements
             deps["report_statements"] = [s.model_dump() if hasattr(s, "model_dump") else s for s in rep_out.statements]
-            emit_event(state, "solver", "report_ready", f"Generated {len(rep_out.statements)} report statements")
     except Exception as e:
         emit_event(state, "solver", "warning", f"Write report skipped or failed: {str(e)}")
+
+    # Deterministic report generation & verification
+    report_data = generate_report(state, raw_statements=raw_statements)
+    if state.final is None:
+        state.final = {}
+    state.final["report"] = report_data
+    deps["report"] = report_data
+    emit_event(
+        state, "solver", "report_ready",
+        f"Generated report: {report_data['verification_summary']['summary_text']}",
+        payload={"verification": report_data["verification_summary"]}
+    )
+
     state.phase = "REPORT_REVIEW"
 
 def handle_report_review(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
+    # Optional Critic review of statements (§12.5)
+    raw_stmts = deps.get("report_statements", [])
+    if raw_stmts:
+        try:
+            rev_out = llm_call(
+                "critic", "report_review",
+                {"statements": raw_stmts},
+                ReportReviewOutput,
+                benchmark_id=state.benchmark_id
+            )
+            if rev_out and hasattr(rev_out, "flags") and state.final and "report" in state.final:
+                state.final["report"]["critic_flags"] = [f.model_dump() for f in rev_out.flags]
+                emit_event(state, "critic", "report_reviewed", f"Critic reviewed report: {rev_out.verdict} with {len(rev_out.flags)} flags")
+        except Exception:
+            pass
+
     state.phase = "DONE"
 
 PHASE_HANDLERS = {

@@ -37,13 +37,31 @@
     - Unified the operational console (`/p/:id`), report page (`/p/:id/report`), and project launcher (`/new`) into an archival Kraft paper & ink palette (`#EDE7DB`, `#FAF7F0`, `#CDC5B4`).
     - Fixed root body background in `index.html` and `index.css` to prevent dark background peeking during scroll.
 - [x] **Stage 11**: Report — *Owner: Track A (generation) + Track B+D (rendering)*
-  - *Gate Run Results:* PASS (Certified reproduction report generation & interactive rendering at `/p/:id/report` with baseline comparison charts, patch provenance with Critic checklist, config audits, and limitation disclosures).
+  - *Gate Run Results:* PASS (`pytest tests/unit/test_report_verifier.py` passed; `tools/report.py` implemented with placeholder resolution, deterministic verifier V1–V7, unpatched vs final runs comparison for frontend `ReportChart`, Markdown & HTML exports, and `/api/projects/{id}/report[.md|.html]` endpoints; certified reproduction report interactive rendering at `/p/:id/report` with baseline comparison charts, patch provenance with Critic checklist, config audits, and limitation disclosures).
 - [ ] **Stage 12**: Evaluation sweep — *Owner: TBD (Track C)*
 - [ ] **Stage 13**: Hardening & fallbacks — *Owner: TBD (Track B+D)*
 - [ ] **Stage 14**: Docs & demo kit — *Owner: All*
 
 ## Checkpoint Reports
-*(Updated after Stages 3, 7, 10, and 13)*
+*(Updated after Stages 3, 7, 10, 11, and 13)*
+
+### After Stage 11 (Report Generation & Verification Engine Complete)
+- **What works:**
+  - **Deterministic Verification Engine (`tools/report.py`)**: Enforces verifier rules V1–V7 on all solver-generated statements:
+    - Resolves template placeholders `{{claim...}}`, `{{result...}}`, `{{status}}`.
+    - Bounds numerical citations against measured results and target claims.
+    - Strips accusatory / hostile language (*hallucinated*, *fraud*, *fabricated*).
+    - Checks status consistency against final reproduction verdict.
+    - Validates evidence references against recorded project evidence ledger.
+    - Isolates non-compliant statements into `statements_removed` with explicit violation reasons.
+  - **Dual-Run Comparison & Reporting Contract**: Computes unpatched (Run 1) vs. final patched (Run N) metrics directly in `runs_summary` and `attempts` payload, powering the frontend Recharts `ReportChart` tolerance band display.
+  - **Multi-Format Export Routes**:
+    - JSON: `/api/projects/{id}/report`
+    - Markdown: `/api/projects/{id}/report.md`
+    - Self-contained HTML: `/api/projects/{id}/report.html`
+  - **Interactive Frontend Report Viewer (`/p/:id/report`)**: Archival Field Desk styling, dynamic `Stamp` verdict badge, metric comparison chart, provenance tables, Critic checklist review flags, and one-click Markdown clipboard copy / PDF print export.
+  - **Test Suite**: 65 passed, 3 skipped (Docker), 0 failed across unit, agent, e2e API, and report verifier test suites.
+- **What's next:** Stage 12 Evaluation sweep (sweep across benchmark cases B1–B5) and Stage 14 documentation release kit.
 
 ### After Stage 10 (Frontend & UI Polish Complete)
 - **What works:**
@@ -53,7 +71,7 @@
   - **Certified Reproduction Report (`/p/:id/report`)**: Stamp verdict badge, baseline vs observed delta bar chart, applied patch audit, and honest limits disclosure.
   - **Archival Field Desk Design System**: Consistent warm Kraft paper (`#EDE7DB` / `#FAF7F0`), ink typography (`Libre Caslon Text` & `JetBrains Mono`), rust accents (`#B8572F`), and responsive ergonomics across desktop and laptop screens.
   - **Test Suite**: 59 passed in 11s across unit, agent, arbiter, loop, and API suites. Frontend TypeScript compilation and production bundle build clean.
-- **What's next:** Stage 12 Evaluation sweep and Stage 14 documentation / final release kit.
+- **What's next:** Stage 11 Report generation and Stage 12 Evaluation sweep.
 
 ### After Stage 7 & Stage 8 (Checkpoint IC-2 Ready)
 - **What works:**

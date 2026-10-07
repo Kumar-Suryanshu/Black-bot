@@ -11,6 +11,10 @@ from agent.loop import get_sandbox
 
 def test_b4_api_e2e(monkeypatch):
     import agent.llm
+    from tests.agent.fakes import FakeLLM, get_fake_script_b4_combined
+    from agent.llm import set_fake_llm
+    fake_llm = FakeLLM(get_fake_script_b4_combined())
+    set_fake_llm(fake_llm)
     monkeypatch.setattr(agent.llm, "LLM_MODE", "replay")
     # Use cassette replay mode
     monkeypatch.setenv("LLM_MODE", "replay")
@@ -114,8 +118,15 @@ def test_b4_api_e2e(monkeypatch):
         assert resp.status_code == 200
         report_data = resp.json()
         assert report_data["status"] == "REPRODUCED"
-        
-        # 10. Check SSE events (test stream_events endpoint loosely)
-        # We can just fetch the endpoint and close it
-        # Actually since events are also persisted to DB, let's just make a regular get and read partial response if possible, or skip stream for e2e since we know it works.
-        pass
+        assert "runs_summary" in report_data
+        assert "statements" in report_data
+        assert "markdown" in report_data
+
+        # Test markdown and html download endpoints
+        resp_md = client.get(f"/api/projects/{project_id}/report.md")
+        assert resp_md.status_code == 200
+        assert "REPRODUCED" in resp_md.text
+
+        resp_html = client.get(f"/api/projects/{project_id}/report.html")
+        assert resp_html.status_code == 200
+        assert "Rerun Verification Report" in resp_html.text

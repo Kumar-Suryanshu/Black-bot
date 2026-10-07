@@ -1,11 +1,13 @@
 import json
 import os
 from typing import Optional, List
-from fastapi import APIRouter, HTTPException, Header, Request
+from fastapi import APIRouter, HTTPException, Header, Request, Response
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
 import uuid
 import datetime
+
+from tools.report import generate_report
 
 from backend.app.models import (
     ProjectCreateRequest, ProjectCreateResponse,
@@ -245,8 +247,38 @@ def get_report(id: str):
     state = get_project_state("data/rerun.db", id)
     if not state:
         raise HTTPException(status_code=404, detail="Project not found")
-    # Stage 11 will generate real report
-    return {"report": "Stage 11 pending", "status": state.final.get("status") if state.final else state.phase}
+
+    # If already generated during handle_report, return it
+    if state.final and "report" in state.final and state.final["report"]:
+        return state.final["report"]
+
+    # Generate deterministically from current state
+    rep = generate_report(state)
+    if state.final is None:
+        state.final = {}
+    state.final["report"] = rep
+    save_project_state("data/rerun.db", id, state.benchmark_id, state.repo_commit, state.final.get("status", state.phase), state)
+    return rep
+
+@router.get("/api/projects/{id}/report.md")
+def get_report_md(id: str):
+    state = get_project_state("data/rerun.db", id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Project not found")
+    report = state.final.get("report") if state.final else None
+    if not report:
+        report = generate_report(state)
+    return Response(content=report["markdown"], media_type="text/markdown")
+
+@router.get("/api/projects/{id}/report.html")
+def get_report_html(id: str):
+    state = get_project_state("data/rerun.db", id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Project not found")
+    report = state.final.get("report") if state.final else None
+    if not report:
+        report = generate_report(state)
+    return Response(content=report["html"], media_type="text/html")
 
 @router.post("/api/projects/{id}/abort")
 def abort_project(id: str):
