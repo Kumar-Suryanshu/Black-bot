@@ -1,0 +1,204 @@
+import React, { useState } from 'react';
+import { AlertTriangle, Check, X, FileEdit } from 'lucide-react';
+import type { Patch, CriticReview } from '../../api/types';
+import { CriticPanel } from './CriticPanel';
+import { EvidenceChip } from '../ui/EvidenceChip';
+
+interface ApprovalModalProps {
+  isOpen: boolean;
+  approvalId: string;
+  patch: Patch;
+  criticReview?: CriticReview | null;
+  banner?: string | null;
+  requiresExtraConfirm?: boolean;
+  onApprove: (comment?: string, confirmExtra?: boolean) => void;
+  onReject: (comment?: string) => void;
+  onSelectEvidence?: (id: string) => void;
+}
+
+export const ApprovalModal: React.FC<ApprovalModalProps> = ({
+  isOpen,
+  approvalId,
+  patch,
+  criticReview,
+  banner,
+  requiresExtraConfirm = false,
+  onApprove,
+  onReject,
+  onSelectEvidence,
+}) => {
+  const [comment, setComment] = useState('');
+  const [extraConfirmed, setExtraConfirmed] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  if (!isOpen) return null;
+
+  const isConfigAlignment = patch.risk_class === 'config_alignment';
+  const hasBanner = Boolean(banner);
+  const canApprove = !requiresExtraConfirm || extraConfirmed;
+
+  const handleApprove = async () => {
+    if (!canApprove || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      await onApprove(comment, extraConfirmed);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleReject = async () => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      await onReject(comment);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4 overflow-y-auto animate-fade-in">
+      <div
+        className="w-full max-w-3xl bg-[#FAF7F0] border-2 border-rust rounded-xl p-6 shadow-2xl space-y-6 max-h-[90vh] overflow-y-auto font-mono text-xs text-[#1F2A44]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-[#CDC5B4] pb-4">
+          <div className="flex items-center gap-2.5">
+            <span className="w-8 h-8 rounded bg-amber-100 border border-amber-300 flex items-center justify-center text-amber-800">
+              <FileEdit className="w-4 h-4" />
+            </span>
+            <div>
+              <h2 className="text-base font-serif uppercase tracking-wide text-[#1F2A44] font-bold">
+                Human Approval Gate: {patch.id || 'Proposed Patch'}
+              </h2>
+              <span className="text-[11px] text-[#4A5470] font-mono">
+                Action Required: Approval ID <span className="text-amber-800 font-bold">{approvalId}</span>
+              </span>
+            </div>
+          </div>
+
+          <span className="px-2.5 py-1 rounded bg-[#E5DFD3] text-[#1F2A44] border border-[#CDC5B4] text-[10px] font-bold uppercase tracking-wider">
+            {patch.risk_class}
+          </span>
+        </div>
+
+        {/* Warning Banner (if any) */}
+        {hasBanner && (
+          <div className="p-3.5 rounded-lg bg-amber-50 border border-amber-300 flex items-start gap-3 text-amber-900">
+            <AlertTriangle className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <span className="font-bold text-amber-800 block">POLICY OR CRITIC WARNING:</span>
+              <p className="text-[11px] leading-relaxed">
+                Banner flagged: <span className="font-mono text-[#1F2A44] font-bold underline">{banner}</span>. Proceed with heightened scrutiny.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Rationale & Integrity Note */}
+        <div className="space-y-2">
+          <div className="text-[#1F2A44] bg-[#F4F1E8] p-3.5 rounded-lg border border-[#CDC5B4] leading-relaxed">
+            <span className="text-amber-800 font-bold block mb-1">Proposed Rationale:</span>
+            {patch.rationale || 'Address identified error and align environment/settings.'}
+          </div>
+
+          {isConfigAlignment && (
+            <div className="p-2.5 rounded bg-[#F4F1E8] border border-rust/40 text-[#1F2A44] text-[11px] flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-rust"></span>
+              <span className="italic font-serif">
+                "Integrity Note: Justified by a paper-stated value, not by the target metric."
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* Evidence Citations */}
+        {patch.evidence_ids && patch.evidence_ids.length > 0 && (
+          <div className="flex items-center gap-2 pt-1">
+            <span className="text-[#4A5470] text-xs">Citing Evidence Artifacts:</span>
+            <div className="flex flex-wrap gap-1.5">
+              {patch.evidence_ids.map((eid) => (
+                <EvidenceChip key={eid} id={eid} onClick={onSelectEvidence} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Diff preview */}
+        <div className="space-y-1.5">
+          <span className="text-[#4A5470] text-xs font-semibold uppercase tracking-wider block">
+            Target Unified Diff:
+          </span>
+          <div className="p-4 bg-[#FAF7F0] border border-[#CDC5B4] rounded-lg max-h-56 overflow-y-auto leading-relaxed text-[11px]">
+            {patch.diff ? (
+              patch.diff.split('\n').map((line, idx) => {
+                let color = 'text-[#1F2A44]';
+                if (line.startsWith('+')) color = 'text-[#15803D] bg-[#DCFCE7] px-1 rounded block font-medium';
+                if (line.startsWith('-')) color = 'text-[#B91C1C] bg-[#FEE2E2] px-1 rounded block font-medium';
+                if (line.startsWith('@@')) color = 'text-[#8F3F20] bg-[#FEF3C7] px-1 block font-bold';
+                return <div key={idx} className={color}>{line}</div>;
+              })
+            ) : (
+              <div className="text-[#4A5470] italic">No textual diff available</div>
+            )}
+          </div>
+        </div>
+
+        {/* Embedded Critic Panel */}
+        <CriticPanel review={criticReview} />
+
+        {/* Extra Confirmation Checkbox */}
+        {requiresExtraConfirm && (
+          <label className="flex items-start gap-3 p-3 rounded-lg bg-amber-50 border border-amber-300 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={extraConfirmed}
+              onChange={(e) => setExtraConfirmed(e.target.checked)}
+              className="mt-0.5 rounded accent-rust focus:ring-rust"
+            />
+            <span className="text-amber-900 text-xs leading-relaxed">
+              I have verified the flagged banner and explicitly confirm applying this change despite warnings.
+            </span>
+          </label>
+        )}
+
+        {/* Optional Comment */}
+        <div className="space-y-1">
+          <label className="text-[#4A5470] text-[11px] block">Operator Notes (optional):</label>
+          <input
+            type="text"
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            placeholder="e.g., Verified against Figure 2 in paper..."
+            className="w-full bg-[#FAF7F0] border border-[#CDC5B4] rounded-lg px-3 py-2 text-xs text-[#1F2A44] focus:outline-none focus:border-rust"
+          />
+        </div>
+
+        {/* Action Buttons */}
+        <div className="flex items-center justify-end gap-3 pt-4 border-t border-[#CDC5B4]">
+          <button
+            type="button"
+            onClick={handleReject}
+            disabled={isSubmitting}
+            className="flex items-center gap-1.5 px-4 py-2.5 rounded-sm bg-red-50 hover:bg-red-100 text-red-700 border border-red-300 font-bold text-xs uppercase tracking-wider transition-colors disabled:opacity-50"
+          >
+            <X className="w-4 h-4" />
+            <span>Reject Patch</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleApprove}
+            disabled={!canApprove || isSubmitting}
+            className="flex items-center gap-1.5 px-5 py-2.5 rounded-sm bg-rust hover:bg-[#A34B26] text-[#FAF7F0] font-bold text-xs uppercase tracking-wider border border-l-4 border-l-[#7A3317] shadow-md active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Check className="w-4 h-4 stroke-[3] text-[#FAF7F0]" />
+            <span>{isSubmitting ? 'Approving...' : 'Approve & Apply'}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};

@@ -4,41 +4,41 @@
       "id": "b1_control",
       "title": "Control Case",
       "description": "Correct paper implementation",
-      "repo_path": "benchmarks\\cases\\b1_control",
+      "repo_path": "benchmarks/cases/b1_control",
       "paper_path": "benchmarks/papers/digits_softmax.pdf",
-      "gold_path": "benchmarks\\gold\\b1_control.json"
+      "gold_path": "benchmarks/gold/b1_control.json"
     },
     {
       "id": "b2_dependency",
       "title": "Missing Dependency",
       "description": "Omitted PyYAML",
-      "repo_path": "benchmarks\\cases\\b2_dependency",
+      "repo_path": "benchmarks/cases/b2_dependency",
       "paper_path": "benchmarks/papers/digits_softmax.pdf",
-      "gold_path": "benchmarks\\gold\\b2_dependency.json"
+      "gold_path": "benchmarks/gold/b2_dependency.json"
     },
     {
       "id": "b3_silent_config",
       "title": "Silent Config Error",
       "description": "Bad learning rate",
-      "repo_path": "benchmarks\\cases\\b3_silent_config",
+      "repo_path": "benchmarks/cases/b3_silent_config",
       "paper_path": "benchmarks/papers/digits_softmax.pdf",
-      "gold_path": "benchmarks\\gold\\b3_silent_config.json"
+      "gold_path": "benchmarks/gold/b3_silent_config.json"
     },
     {
       "id": "b4_combined",
       "title": "Combined Error",
       "description": "Missing dependency and bad learning rate",
-      "repo_path": "benchmarks\\cases\\b4_combined",
+      "repo_path": "benchmarks/cases/b4_combined",
       "paper_path": "benchmarks/papers/digits_softmax.pdf",
-      "gold_path": "benchmarks\\gold\\b4_combined.json"
+      "gold_path": "benchmarks/gold/b4_combined.json"
     },
     {
       "id": "b5_unable",
       "title": "GPU Required",
       "description": "Code explicitly requires cuda",
-      "repo_path": "benchmarks\\cases\\b5_unable",
+      "repo_path": "benchmarks/cases/b5_unable",
       "paper_path": "benchmarks/papers/digits_softmax.pdf",
-      "gold_path": "benchmarks\\gold\\b5_unable.json"
+      "gold_path": "benchmarks/gold/b5_unable.json"
     }
   ]
 }
