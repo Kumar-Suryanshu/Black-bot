@@ -131,6 +131,8 @@ def handle_ingest(state: ProjectState, deps: dict):
     ws_path = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
     os.makedirs(ws_path, exist_ok=True)
     repo_src = case_info.get("repo_path")
+    if repo_src:
+        repo_src = repo_src.replace("\\","/")
     if repo_src and os.path.exists(repo_src):
         for item in Path(repo_src).iterdir():
             dest = Path(ws_path) / item.name
@@ -723,5 +725,3 @@ def run_project(state: ProjectState, deps: Optional[dict] = None):
         handler(state, deps_dict)
         if state.pending:
             return  # Paused for human approval or claim confirmation
-
-

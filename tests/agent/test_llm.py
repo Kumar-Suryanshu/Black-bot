@@ -2,45 +2,46 @@ import json
 import pytest
 from pydantic import BaseModel
 from pathlib import Path
+from unittest.mock import patch
 
-from agent.llm import call, set_fake_llm, set_event_listener, LLMOutputInvalid
+from agent.llm import call, LLMOutputInvalid
 from agent.config import scrub_secrets
-from tests.agent.fakes import FakeLLM
 
 class SampleModel(BaseModel):
     name: str
     count: int
 
-def test_llm_call_success():
-    fake = FakeLLM([
-        ("solver", "test_mode", {"name": "test_agent", "count": 42})
-    ])
-    set_fake_llm(fake)
+def mock_response(content):
+    return content
+
+@patch("agent.llm.execute_provider_request")
+def test_llm_call_success(mock_call):
+    mock_call.return_value = mock_response(json.dumps({"name": "test_agent", "count": 42}))
     
     res = call("solver", "test_mode", {"foo": "bar"}, SampleModel)
     assert isinstance(res, SampleModel)
     assert res.name == "test_agent"
     assert res.count == 42
 
-def test_llm_reprompt_on_invalid_json():
+@patch("agent.llm.execute_provider_request")
+def test_llm_reprompt_on_invalid_json(mock_call):
     # First response invalid json, second response valid
-    fake = FakeLLM([
-        ("solver", "test_mode", "This is not json at all!"),
-        ("solver", "test_mode", {"name": "fixed_agent", "count": 10})
-    ])
-    set_fake_llm(fake)
+    mock_call.side_effect = [
+        mock_response("This is not json at all!"),
+        mock_response(json.dumps({"name": "fixed_agent", "count": 10}))
+    ]
     
     res = call("solver", "test_mode", {"foo": "bar"}, SampleModel)
     assert res.name == "fixed_agent"
     assert res.count == 10
 
-def test_llm_fails_after_reprompt():
+@patch("agent.llm.execute_provider_request")
+def test_llm_fails_after_reprompt(mock_call):
     # Both responses invalid
-    fake = FakeLLM([
-        ("solver", "test_mode", "Invalid first"),
-        ("solver", "test_mode", "Invalid second")
-    ])
-    set_fake_llm(fake)
+    mock_call.side_effect = [
+        mock_response("Invalid first"),
+        mock_response("Invalid second")
+    ]
     
     with pytest.raises(LLMOutputInvalid):
         call("solver", "test_mode", {"foo": "bar"}, SampleModel)
@@ -66,7 +67,8 @@ def test_replay_mode_miss(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="Cassette miss"):
         call("solver", "unknown_mode", {"a": 1}, SampleModel)
 
-def test_cassette_record_and_replay(tmp_path, monkeypatch):
+@patch("agent.llm.execute_provider_request")
+def test_cassette_record_and_replay(mock_call, tmp_path, monkeypatch):
     cassette_dir = str(tmp_path / "cassettes")
     from agent import llm
     
@@ -74,17 +76,14 @@ def test_cassette_record_and_replay(tmp_path, monkeypatch):
     monkeypatch.setattr(llm, "LLM_MODE", "record")
     monkeypatch.setattr(llm, "CASSETTE_DIR", cassette_dir)
     
-    fake = FakeLLM([
-        ("solver", "record_test", {"name": "saved_agent", "count": 99})
-    ])
-    set_fake_llm(fake)
+    mock_call.return_value = mock_response(json.dumps({"name": "saved_agent", "count": 99}))
     
     res = call("solver", "record_test", {"test_key": "val"}, SampleModel, benchmark_id="test_bench")
     assert res.name == "saved_agent"
     
     # 2. Replay mode
     monkeypatch.setattr(llm, "LLM_MODE", "replay")
-    set_fake_llm(None) # Ensure fake is not called
+    mock_call.side_effect = RuntimeError("Should not be called in replay mode")
     
     replayed = call("solver", "record_test", {"test_key": "val"}, SampleModel, benchmark_id="test_bench")
     assert replayed.name == "saved_agent"

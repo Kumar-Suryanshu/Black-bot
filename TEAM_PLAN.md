@@ -32,7 +32,7 @@
 | **Stage 3** — Sandbox | ✅ Done | **Member 2** | `dev.py wheelhouse` and `dev.py selftest` pass |
 | **Stage 4** — Benchmark | ✅ Done | **Member 3** | Templates, cases, papers, and calibration sweep pass |
 | **Stage 5** — Baselines | ✅ Done | **Member 3** | B-0 fixed script, B-2 stub, and harness built. Sweep running. |
-| **Stage 6** — LLM Layer | ✅ Done | **Member 1** | `agent/llm.py`, providers, cassettes, fallback, test_llm pass |
+| **Stage 6** — LLM Layer | ✅ Done | **Member 1** | `agent/llm.py`, providers, cassettes, fallback, test_llm pass, Replay fully implemented |
 | **Stage 7** — Solver Loop | ✅ Done | **Member 1** | `agent/loop.py`, full P1–P10 policy, budget guards, test_loop pass |
 | **Stage 8** — Critic + Arbiter | ✅ Done | **Member 1** | `agent/critic/review.py`, `agent/arbiter.py`, X1–X9 adversarial tests pass |
 | **Stage 9** — Backend API | ✅ Done | **Member 2** | Endpoints and E2E API tests pass |
@@ -219,9 +219,8 @@ python scripts/dev.py bench --systems B-0
 
 **What to build:**
 - `agent/llm.py` — the `call(role, mode, payload, out_model)` function (§13.1)
-- Provider implementations: `openai_compat`, `anthropic`, `fake`, `replay`
+- Provider implementations: `gemini`, `replay`
 - Cassette record/replay system (§13.2)
-- `FakeLLM` for tests (§13.3)
 - Solver and Critic preambles (§13.4)
 - JSON schema validation of LLM outputs against Pydantic models
 
@@ -238,12 +237,11 @@ pytest tests/agent/test_llm.py
 
 **Deliverables checklist:**
 - [ ] `agent/llm.py` with `call()` function
-- [ ] `openai_compat` provider (works for Ollama)
-- [ ] `anthropic` provider
-- [ ] `fake` provider for testing
+- [ ] `gemini` provider
+- [ ] `replay` provider for testing
 - [ ] `replay` provider for cassettes
 - [ ] `agent/config.py` with all Appendix B constants
-- [ ] `FakeLLM` with complete scripts for b1–b5
+- [ ] Cassette replay for b1-b5
 - [ ] Secret scrubbing in all logs
 - [ ] Retry + fallback logic
 
@@ -268,7 +266,7 @@ pytest tests/agent/test_llm.py
 **Gate:**
 ```
 pytest tests/agent -k "b1 or b2 or b3 or b4 or b5 or budgets or resume or illegal"
-# All green with FakeLLM + FakeSandbox
+# All green with Replay + FakeSandbox
 python scripts/dev.py run --case b2_dependency  # real LLM, human types 'y' to approve
 # Reaches REPRODUCED
 ```
@@ -283,7 +281,7 @@ python scripts/dev.py run --case b2_dependency  # real LLM, human types 'y' to a
 - [ ] `agent/solver/schemas.py` with Pydantic output models
 - [ ] `agent/events.py` — event emission for all §6.3 event types
 - [ ] Resume from `state_json` on crash
-- [ ] Tests: b1–b5 on FakeLLM, budget exhaustion, illegal tool rejection
+- [ ] Tests: b1–b5 on replay, budget exhaustion, illegal tool rejection
 
 > [!WARNING]
 > This is the **largest and most critical stage**. The DIAGNOSE episode (§7.3) is where the "intelligence" lives. The silent-divergence branch (run exits 0 but wrong number → config audit) is the **key demo moment**.
@@ -360,7 +358,7 @@ python scripts/dev.py adversarial   # prints per-fixture stopping layer
 
 **Gate:**
 ```
-pytest tests/e2e/test_b4_api.py   # FakeLLM: create → start → confirm → approve ×2 → report
+pytest tests/e2e/test_b4_api.py   # Replay: create → start → confirm → approve ×2 → report
 ```
 
 **Deliverables checklist:**
@@ -399,7 +397,7 @@ pytest tests/e2e/test_b4_api.py   # FakeLLM: create → start → confirm → ap
 **Gate:**
 ```
 npm run build   # succeeds
-# Human completes B4 by mouse with backend on FakeLLM/replay
+# Human completes B4 by mouse with backend on replay/replay
 # Screenshots saved to docs/screens/
 ```
 
@@ -513,7 +511,7 @@ Stage 0 ─── Stage 1 ─── Stage 2 ──┬── Stage 3 (Sandbox)   
 
 **What can run in parallel RIGHT NOW:**
 - ✅ **Stage 5** (Member 3) — Baselines and harness (Depends on Stage 4)
-- ✅ **Stage 6** (Member 1) — LLM layer, providers, FakeLLM
+- ✅ **Stage 6** (Member 1) — LLM layer, providers, replay
 
 > [!TIP]
 > Stages 5 and 6 have **zero dependencies on each other**. Member 3 and Member 1 can start them immediately. Stage 7 needs both Stage 3 (Done) and Stage 6, so Member 1 can move straight to it after Stage 6.
@@ -559,7 +557,7 @@ These are the moments where team members must sync and verify things work togeth
 
 | Checkpoint | When | Who Syncs | What to Prove |
 |------------|------|-----------|---------------|
-| **IC-1** | After Stages 3 + 6 | Member 1 + 2 | Core + sandbox run B2 with FakeLLM (skeleton works, zero model risk) |
+| **IC-1** | After Stages 3 + 6 | Member 1 + 2 | Core + sandbox run B2 with replay (skeleton works, zero model risk) |
 | **IC-2** | After Stage 7 | Member 1 + 2 + 3 | Real LLM completes B4 from CLI (the agent works, no UI yet) |
 | **IC-3** | After Stage 10 | All | UI drives B4 live with approvals (the product exists) |
 | **IC-4** | After Stage 12 | All | Full evaluation sweep gives a table (we have honest numbers) |
@@ -699,7 +697,7 @@ python scripts/dev.py replay --case b4   # Replay from cassette
 - [ ] README states limits first; no secrets in repo or logs
 - [ ] GPU_ENABLED=false needs no GPU; gpu-smoke passes or SKIPs
 - [ ] Tests prove guarded keys work correctly and docs aren't patch provenance
-- [ ] Team can answer: "Why not just Claude Code?" and "Does the Critic actually help?"
+- [ ] Team can answer: "Why not just a generic coding agent?" and "Does the Critic actually help?"
 
 ---
 

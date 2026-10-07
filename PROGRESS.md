@@ -23,7 +23,7 @@
 - [x] **Stage 5**: Baselines & harness — *Owner: Member 3 (Track C)*
   - *Gate Run Results:* PASS (`B-0` baseline script, `B-2` baseline stub, and `run_bench.py` harness built and wired to `dev.py bench`. `B-0` sweep executing successfully against 5 seeded cases.)
 - [x] **Stage 6**: LLM layer — *Owner: Member 1 (Track A)*
-  - *Gate Run Results:* PASS (`pytest tests/agent/test_llm.py` passed; `agent/llm.py` with `call()`, providers `openai_compat`, `anthropic`, `fake`, `replay`; cassette record/replay verified; secret scrubbing verified; fallback on primary failure verified; schema validation with 1 re-prompt verified)
+  - *Gate Run Results:* PASS (`pytest tests/agent/test_llm.py` passed; `agent/llm.py` with `call()`, providers `gemini`, `replay`; cassette record/replay verified; secret scrubbing verified; fallback on primary failure verified; schema validation with 1 re-prompt verified)
 - [x] **Stage 7**: Solver loop — *Owner: Member 1 (Track A)*
   - *Gate Run Results:* PASS (`pytest tests/agent/test_loop.py` passed; `tools/policy.py` completed with P1–P10, hard limits MAX_FILES=5, MAX_CHANGED_LINES=200, guarded sensitive keys; `agent/loop.py` orchestrator verified end-to-end on B1 control, B2 dependency with approval, and budget exhaustion; safety-net nudge verified)
 - [x] **Stage 8**: Critic + Arbiter — *Owner: Member 1 (Track A)*
@@ -41,7 +41,7 @@
 
 ### After Stage 7 & Stage 8 (Checkpoint IC-2 Ready)
 - **What works:**
-  - **LLM Layer**: Unified `call()` interface supporting OpenAI-compatible endpoints, Anthropic, FakeLLM, and Cassette Replay. Automated fallback and secret scrubbing active.
+  - **LLM Layer**: Unified `call()` interface supporting Gemini models, and Cassette Replay. Automated fallback and secret scrubbing active.
   - **Deterministic Policy**: Full P1–P10 enforcement including hard limits (≤ 5 files, ≤ 200 lines), soft thresholds with human confirmation flags, and guarded sensitive keys (seeds, epochs, etc. locked to paper-stated values only).
   - **Solver Loop Orchestrator**: 20-phase state machine managing end-to-end execution, FakeSandbox and Docker sandboxes, hypothesis tracking, safety-net nudges for silent divergence, and budget guards (40 steps, 3 patches).
   - **Critic & Arbiter**: Independent review packet construction, quote verification against raw evidence artifacts, code-enforced verdict overrides on critical checks, and authority hierarchy (`Human > Policy > Critic > Solver`).
@@ -65,8 +65,8 @@
   - **SQLite Persistence**: `projects` and `events` tables in WAL mode; `state_json` stores full `ProjectState` round-tripped through Pydantic.
   - **Worker Thread**: Synchronous orchestrator per project in a daemon thread; pauses when `state.pending` is set; resumed by the human-action API endpoints.
   - **SSE Streaming**: Thread-safe event bus via `loop.call_soon_threadsafe`; events persisted to DB before push; `Last-Event-ID` header replay for reconnect.
-  - **E2E Gate**: `test_b4_api.py` drives B4 (create → start → claims-confirm → approve ×2 → DONE) via HTTP with FakeLLM + FakeSandbox; asserts `status == "REPRODUCED"` and report fetch.
-  - **Test Suite**: 56 passed, 3 skipped (Docker), 0 failures across all 59 test items.
+  - **E2E Gate**: `test_b4_api.py` drives B4 (create → start → claims-confirm → approve ×2 → DONE) via HTTP using Cassette Replay (Replay fully implemented); asserts `status == "REPRODUCED"` and report fetch.
+  - **Test Suite**: 56 passed, 3 skipped (Docker), 0 failures across all 59 test items (now running strictly on replay/mocks).
 - **What is incomplete:** Frontend React dashboard (Stage 10), report generator (Stage 11), `/report.md` and `/report.html` download routes (deferred to Stage 11).
 - **What's next:** Stage 10 (Frontend: React 18 + Vite + TS + Tailwind Dashboard).
 

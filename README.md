@@ -26,7 +26,7 @@
 8. Run `make api` and start exploring.
 
 ## Core Components
-- **`agent/llm.py`**: Unified multi-provider LLM interface supporting OpenAI-compatible endpoints, Anthropic, FakeLLM, and Cassette Record/Replay with automated fallback and secret scrubbing.
+- **`agent/llm.py`**: Unified multi-provider LLM interface supporting Gemini API and Cassette Record/Replay with automated fallback and secret scrubbing.
 - **`agent/loop.py`**: Orchestrator executing the 20-phase state machine with budget guards and safety-net nudges.
 - **`tools/policy.py`**: Deterministic policy checker enforcing rules P1–P10, hard limits (≤ 5 files, ≤ 200 lines), and guarded sensitive keys.
 - **`agent/critic/review.py` & `agent/arbiter.py`**: Independent review packet verification and decision escalation table.
@@ -84,7 +84,6 @@
 │   └── run_adversarial.py
 ├── tests
 │   ├── agent
-│   │   ├── fakes.py
 │   │   ├── test_llm.py
 │   │   ├── test_loop.py
 │   │   └── test_critic.py

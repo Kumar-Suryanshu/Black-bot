@@ -7,3 +7,4 @@ pymupdf
 pypdf
 httpx
 PyYAML
+python-dotenv

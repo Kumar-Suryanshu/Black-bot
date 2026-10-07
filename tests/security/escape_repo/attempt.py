@@ -36,7 +36,7 @@ except Exception:
     pass
 
 # 3. Leaked Env Vars
-if "OPENAI_API_KEY" in os.environ or "ANTHROPIC_API_KEY" in os.environ or "GEMINI_API_KEY" in os.environ:
+if "GEMINI_API_KEY" in os.environ or "SOLVER_API_KEY" in os.environ:
     results["leaked_env"] = True
 
 # 4. Docker Socket
