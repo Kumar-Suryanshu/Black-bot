@@ -12,8 +12,36 @@ export const CoverScene: React.FC = () => {
         color: 'var(--cream)',
       }}
     >
-      {/* 30 Stars (SVG circles with varied opacities) */}
+      {/* 30 Stars with soft organic twinkling */}
       <svg className="absolute inset-0 w-full h-full pointer-events-none" aria-hidden="true">
+        <style>{`
+          @keyframes starTwinkle {
+            0%, 100% {
+              opacity: 0.35;
+              transform: scale(0.9);
+            }
+            50% {
+              opacity: 0.95;
+              transform: scale(1.3);
+            }
+          }
+          @keyframes tagFlutter {
+            0%, 100% {
+              transform: rotate(2.5deg) translate3d(0, 0, 0);
+            }
+            35% {
+              transform: rotate(1.2deg) translate3d(2px, -3px, 0);
+            }
+            70% {
+              transform: rotate(3.6deg) translate3d(-1px, 2px, 0);
+            }
+          }
+          @media (prefers-reduced-motion: reduce) {
+            .star-twinkle, .tag-flutter {
+              animation: none !important;
+            }
+          }
+        `}</style>
         {[
           [120, 80, 0.6], [240, 140, 0.4], [380, 70, 0.7], [520, 180, 0.3], [660, 95, 0.8],
           [780, 150, 0.5], [920, 65, 0.7], [1050, 130, 0.4], [1180, 85, 0.9], [1320, 175, 0.3],
@@ -22,7 +50,19 @@ export const CoverScene: React.FC = () => {
           [1100, 250, 0.5], [1280, 220, 0.8], [1490, 270, 0.4], [1680, 230, 0.6], [1820, 260, 0.3],
           [90, 310, 0.4], [420, 340, 0.5], [830, 320, 0.3], [1220, 330, 0.6], [1590, 310, 0.5], [1770, 350, 0.4]
         ].map(([cx, cy, op], i) => (
-          <circle key={i} cx={cx} cy={cy} r="1.4" fill="#F1ECE0" opacity={op} />
+          <circle
+            key={i}
+            cx={cx}
+            cy={cy}
+            r="1.4"
+            fill="#F1ECE0"
+            opacity={op}
+            className="star-twinkle"
+            style={{
+              animation: `starTwinkle ${(i % 3) + 3}s ease-in-out ${(i * 0.4) % 3.5}s infinite`,
+              transformOrigin: `${cx}px ${cy}px`,
+            }}
+          />
         ))}
       </svg>
 
@@ -32,14 +72,17 @@ export const CoverScene: React.FC = () => {
       </div>
 
       {/* Gliding Eagle (top right) */}
-      <div className="absolute right-[8%] xl:right-[12%] top-[11%] md:top-[13%] hidden lg:block pointer-events-none transform -rotate-3 hover:translate-x-2 transition-transform">
+      <div className="absolute right-[8%] xl:right-[12%] top-[11%] md:top-[13%] hidden md:block pointer-events-none">
         <EagleSvg />
       </div>
 
       {/* Floating Torn Tag (right side, tilted) */}
       <div
-        className="absolute right-[3%] sm:right-[5%] xl:right-[8%] top-[32%] md:top-[30%] z-20 pointer-events-auto select-none hidden sm:block"
-        style={{ transform: 'rotate(2.5deg)' }}
+        className="absolute right-[3%] sm:right-[5%] xl:right-[8%] top-[32%] md:top-[30%] z-20 pointer-events-auto select-none hidden sm:block tag-flutter"
+        style={{
+          animation: 'tagFlutter 6.5s ease-in-out infinite',
+          transformOrigin: 'top right',
+        }}
       >
         <div
           className="relative px-4 py-3 md:px-5 md:py-4 shadow-lg text-center border border-kraft/60"
