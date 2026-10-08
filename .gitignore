@@ -1,13 +1,21 @@
+# Python cache
 __pycache__/
-*.pyc
-.env
-/data/
-wheelhouse/
-node_modules/
+*.py[cod]
+*$py.class
+*.so
 .pytest_cache/
-.env.example
-pytest_out.txt
-pytest_out2.txt
-pytest_out3.txt
+
+# Local configuration and credentials
+.env
+data/
+wheelhouse/
+
+# Frontend dependencies and builds
+node_modules/
+frontend/dist/
+
+# Scratch & test outputs
+pytest_out*.txt
+calibration_workspace/
 powershell.cmd
 frontend/powershell.cmd

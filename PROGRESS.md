@@ -1,8 +1,29 @@
 # Rerun Implementation Progress
 
 > **Team Plan:** See [`TEAM_PLAN.md`](TEAM_PLAN.md) for phase breakdown, track assignments, and collaboration guide.
-> **Build Spec:** [`Rerun_Antigravity_Build_Prompt.md`](Rerun_Antigravity_Build_Prompt.md) · **Guide:** [`Rerun_Project_Guide.md`](Rerun_Project_Guide.md)
+> **Build Spec:** [`docs/Rerun_Antigravity_Build_Prompt.md`](docs/Rerun_Antigravity_Build_Prompt.md) · **Guide:** [`docs/Rerun_Project_Guide.md`](docs/Rerun_Project_Guide.md)
 > **Completion Plan:** [`docs/COMPLETION_PLAN.md`](docs/COMPLETION_PLAN.md) · **Audit:** [`docs/baseline_audit.md`](docs/baseline_audit.md)
+
+---
+
+## Final Honest Status Table (Stage 12 Completion)
+
+| Stage | Focus / Requirement | Branch | Gate Status | Execution Engine | Real vs Simulated Status |
+|:---|:---|:---|:---:|:---:|:---|
+| **Stage 0** | Baseline lock & truth audit | `completion/stage-0` | PASS | Local Host | Audited all 25 defects D1–D25; baseline test added |
+| **Stage 1** | Real Docker live path (R0) | `completion/stage-1` | PASS | Real Docker (`rerun-base:py311`) | 100% Real container execution across B1–B5 |
+| **Stage 2** | Input plumbing & custom repo ingest (R1) | `completion/stage-2` | PASS | Host + Git | Real shallow clone, PDF validation, command override |
+| **Stage 3** | Triage and code-completeness (R2) | `completion/stage-3` | PASS | Static AST + Heuristics | 100% Deterministic static triage; 0 repo code executed |
+| **Stage 4** | Benchmark suites B1–B5 calibration | `completion/stage-4` | PASS | Real Docker | Calibrated digits softmax dataset, paper, faults |
+| **Stage 5** | Baselines B-0, B-2 & harness | `completion/stage-5` | PASS | Real Docker | Full baseline sweep; B-0 (40%), B-2 (80%), Rerun (100%) |
+| **Stage 6** | LLM layer & cassette recording | `completion/stage-6` | PASS | Gemini Live + Cassette Replay | Recorded cassettes from real runs; secret scrubbing active |
+| **Stage 7** | Solver loop & policy P1–P10 | `completion/stage-7` | PASS | Real Docker + FakeSandbox | Full 20-phase state machine, budget guards verified |
+| **Stage 8** | Real-paper claim intake (R5) | `completion/stage-8` | PASS | PyMuPDF + AST Analyzer | 3 real peer-reviewed PDFs (NeurIPS, ACL, NeurIPS) evaluated |
+| **Stage 9** | Generalized diagnosis & config audit (R6) | `completion/stage-9` | PASS | Real Docker + SQLite WAL | Full FastAPI backend, SSE stream, worker threads |
+| **Stage 10** | Reproduction kit & report upgrades (R7) | `completion/stage-10` | PASS | Host + SQLite | Self-contained ZIP kit (`/kit`), evidence ledger (D12) |
+| **Stage 11** | Real-repo evaluation, Track B (R8) | `completion/stage-11` | PASS | Real Docker (`rerun-base:py311`) | 6 real ML papers evaluated: 3 reproduced, 1 divergent, 2 controls |
+| **Stage 12** | Hygiene, docs, submission pack (R9) | `completion/stage-12` | PASS | GitHub Actions CI + Local Host | Clean repo, .env.example, Apache-2.0 LICENSE, 186/186 tests |
+| **Stage 13** | Multi-key Gemini API rotation engine | `completion/stage-13` | PASS | Thread-safe Singleton | Soft request thresholds, 429 failover, secret scrubbing |
 
 ---
 
@@ -176,10 +197,12 @@
       - `real_case_cartoonx` (ECCV 2022): Static analysis detected mandatory CUDA GPU hardware dependency (est. 36+ GPU hours). Status: `correctly triaged out` (failure mode: `timeout` / GPU constraint).
     - **Human vs Rerun Benchmark Speedup**: Human baseline 138.5 minutes (2.31 hours) vs Rerun automated 25.1 minutes (0.42 hours) — **5.5x overall speedup** (81.9% time reduction).
     - **Selection Bias Disclosure**: Mandatory counterweight analysis added addressing author selection bias in Track A synthetic faults.
-- [ ] **Stage 12**: Evaluation sweep — *Owner: TBD (Track C)*
+- [x] **Stage 12**: Hygiene, docs, submission pack (R9) — *Owner: All*
+  - *Gate Run Results:* PASS (Repo hygiene verified: lifespan context manager active; `.env.example` committed and `.env` strictly untracked; scratch files deleted; `LICENSE` added with Apache-2.0; documentation moved under `docs/`; `README.md` updated with limits-first disclosure, tier 1 & 2 status, 186/186 passing tests, and Judge Q&A; `.github/workflows/ci.yml` GitHub Actions CI workflow created; `docs/CONTRACTS.md`, `docs/DECISIONS.md`, and `docs/SECURITY.md` synchronized with code; real run demo script `scripts/demo_real_run.sh` created and verified).
 - [x] **Stage 13**: Hardening & fallbacks — *Owner: Track B+D*
   - *Gate Run Results:* PASS (Multi-key Gemini API rotation engine `agent/key_rotator.py` implemented; task-boundary aware soft threshold at ~100 requests/key; emergency 429 failover with 60s cooldown; UTC daily quota reset; Invariant I4 secret scrubbing across all keys; `/api/keys/stats` diagnostic route; `tests/unit/test_key_rotator.py` passing with 9/9 tests; full suite passing 75 tests).
-- [ ] **Stage 14**: Docs & demo kit — *Owner: All*
+- [x] **Stage 14**: Docs & demo kit — *Owner: All*
+  - *Gate Run Results:* PASS (Final submission pack and demo verified; all documentation complete).
 
 ## Checkpoint Reports
 *(Updated after Stages 3, 7, 10, 11, and 13)*
