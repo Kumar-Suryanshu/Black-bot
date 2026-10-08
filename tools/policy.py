@@ -86,6 +86,8 @@ def check(state, proposal, workspace: str = None) -> Dict[str, Any]:
         risk_class = "environment_fix"
     elif proposal.type == "config_value":
         risk_class = "config_alignment"
+    elif proposal.type in ["code_typo", "code_api_compat"]:
+        risk_class = "bug_fix"
 
     # P1 & P2: Path allow-list & deny-list
     for edit in proposal.edits:
@@ -95,8 +97,35 @@ def check(state, proposal, workspace: str = None) -> Dict[str, Any]:
         allowed_ext = f.endswith(".txt") or f.endswith(".yaml") or f.endswith(".yml") or f.endswith(".toml") or f.endswith(".json") or f.endswith(".py")
         if not allowed_ext:
             violations.append(f"P1: File {f} does not match allowed config/dependency/code extensions")
-        if f.endswith(".py") and proposal.type not in ["path_string", "code_typo"]:
+        if f.endswith(".py") and proposal.type not in ["path_string", "code_typo", "code_api_compat"]:
             violations.append(f"P1: Python file {f} cannot be edited for type {proposal.type}")
+        if proposal.type == "code_api_compat" and not f.endswith(".py"):
+            violations.append(f"P1: Patch type code_api_compat is only permitted for Python files, not {f}")
+            
+        # Traceback provenance check for code_api_compat (R6)
+        if proposal.type == "code_api_compat" and f.endswith(".py"):
+            target_base = Path(f).name
+            has_traceback_prov = False
+            ev_dir = Path("data") / "runs" / getattr(state, "project_id", "") / "evidence"
+            for eid in proposal.evidence:
+                if ev_dir.exists():
+                    for ev_file in ev_dir.iterdir():
+                        if ev_file.name.startswith(f"{eid}_"):
+                            try:
+                                ev_txt = ev_file.read_text(encoding="utf-8", errors="ignore")
+                                if target_base in ev_txt or "traceback" in ev_txt.lower() or "error" in ev_txt.lower():
+                                    has_traceback_prov = True
+                                    break
+                            except Exception:
+                                pass
+                if target_base in proposal.rationale and any(w in proposal.rationale.lower() for w in ["traceback", "error", "exception"]):
+                    has_traceback_prov = True
+                    break
+                if matching_hypo and target_base in matching_hypo.text and any(w in matching_hypo.text.lower() for w in ["traceback", "error", "exception"]):
+                    has_traceback_prov = True
+                    break
+            if not has_traceback_prov and not state.allow_high_risk:
+                violations.append(f"P5: Patch type code_api_compat requires traceback provenance citing {f}")
             
         # P2 deny-list
         is_denied = False

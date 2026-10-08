@@ -399,9 +399,15 @@ def handle_observe(state: ProjectState, deps: dict):
             except Exception:
                 pass
     
-    # Classify errors if crashed
+    # Classify errors if crashed (D19: includes attempt flags)
     if latest.exit_code != 0:
-        err_info = classify_error(log_text)
+        err_info = classify_error(
+            log_text,
+            attempt=latest,
+            exit_code=latest.exit_code,
+            oom=latest.oom,
+            timed_out=latest.timed_out
+        )
         latest.error_class = err_info["error_class"]
         state.phase = "DIAGNOSE"
     else:

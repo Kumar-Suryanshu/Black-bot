@@ -118,6 +118,18 @@
     - **Test Suite Status:** 10/10 tests passing in `tests/unit/test_stage8_paper_intake.py`; full regression passing 163/163 tests (`pytest tests -q`); frontend builds cleanly (`npm run build --prefix frontend`).
   - *Status:* PASS — ready for Stage 9.
 
+- [x] **Stage 9 (Completion Plan)**: Generalised diagnosis and configuration audit (R6)
+  - *Branch:* `completion/stage-9`
+  - *Gate Run Results:* PASS:
+    - **Error Library Expansion (D19 + R6):** Added signatures in `tools/errors.py` for `python_version_mismatch` (removed `distutils`/`imp`, syntax incompatibility), `api_deprecation` (e.g. `np.int`, `np.float`, `DataFrame.append`, `torch.load` weights_only), `dataset_missing` (runtime dataset not found/missing data files), and `device_unavailable` (unguarded CUDA at runtime). Closes defect **D19** by classifying directly from attempt flags (`oom`, `timed_out`, and exit code 137).
+    - **Patch Type `code_api_compat`:** Allowed in non-deny-listed `.py` files only with traceback provenance; assigned risk class `bug_fix`; verified by policy P1–P10, Critic, and human approval.
+    - **Negative Fixture Verified:** Verified that attempts to modify evaluation code (`evaluate.py`, `metrics.py`) to match paper results are strictly blocked by Policy P2 deny-list (`test_gate_negative_fixture_blocks_changing_evaluation_code`).
+    - **Gold Patches Verified:** Implemented and validated gold patches for all 4 new error classes (`python_version_mismatch`, `api_deprecation`, `dataset_missing`, `device_unavailable`), proving all pass Policy checks (`test_gate_gold_patches_per_new_error_class_pass_policy`).
+    - **Comprehensive Configuration Audit (`tools/config_audit.py`):** Parses AST `argparse` defaults (`add_argument(... default=...)`), AST `@dataclass` field defaults, Hydra/OmegaConf `defaults:` list inheritance, CLI overrides from `plan.command` (highest precedence), and README snippets. Evaluates runtime vs static confidence, explicitly marking `confidence: "static"` when no runtime effective config was captured and surfacing it in reports (`tools/report.py`).
+    - **Deterministic Notebook Conversion (`tools/notebook.py`):** Converts `.ipynb` code cells to a Python script, automatically and deterministically commenting out IPython magics (`%`, `!`, `?`, `get_ipython()`), and returning `UNSUPPORTED_FORMAT` on malformed / non-notebook files.
+    - **Test Suite Status:** 13/13 tests passing in `tests/unit/test_stage9_diagnosis_audit.py`; full regression passing 176/176 tests (`pytest tests -q`); frontend builds cleanly in 698ms (`npm run build --prefix frontend`).
+  - *Status:* PASS — ready for Stage 10.
+
 ---
 
 ## Initial Build Stage Gates and Deliverables

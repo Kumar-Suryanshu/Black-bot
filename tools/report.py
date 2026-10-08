@@ -396,6 +396,23 @@ def generate_report(
         md_lines.append("*Zero patches required.*")
         md_lines.append("")
 
+    if state.config_diff:
+        conf_level = state.config_diff[0].get("confidence", "static") if state.config_diff else "static"
+        md_lines.append(f"## Configuration Audit (Confidence: `{conf_level}`)")
+        if conf_level == "static":
+            md_lines.append("> **Notice:** Audit confidence is **static** (no runtime effective config was captured; values inferred statically from configs, AST argparse/dataclass defaults, or CLI overrides).")
+        md_lines.append("")
+        md_lines.append("| Setting | Paper Value | Repo / Effective Value | Source | Status |")
+        md_lines.append("| :--- | :--- | :--- | :--- | :--- |")
+        for cd in state.config_diff:
+            src_str = f"{cd.get('source_file') or 'N/A'}"
+            if cd.get('source_line'):
+                src_str += f":{cd.get('source_line')}"
+            if cd.get('source_type'):
+                src_str += f" ({cd.get('source_type')})"
+            md_lines.append(f"| `{cd.get('key')}` | {cd.get('paper_value')} | {cd.get('effective_value')} | {src_str} | **{cd.get('status')}** |")
+        md_lines.append("")
+
     md_lines.append("## 5. Limitations & What Was Not Checked")
     md_lines.append("### Limitations")
     for lim in mandatory_limitations + [s["text"] for s in grouped_statements["limitations"]]:
