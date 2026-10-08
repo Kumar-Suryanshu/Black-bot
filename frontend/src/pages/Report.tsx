@@ -63,26 +63,50 @@ export const Report: React.FC = () => {
 
   // Build Recharts data comparing unpatched (Run 1) vs final patched run vs paper claim
   const attempts = report.attempts || [];
-  const run1 = attempts[0];
-  const runFinal = attempts[attempts.length - 1];
   const claim = report.claims?.[0];
 
-  const reportedTarget = claim?.reported ?? 0.956;
-  const run1Metric = run1?.metrics?.test_accuracy_mean ?? (run1?.exit_code === 0 ? 0.8 : 0);
-  const runFinalMetric = runFinal?.metrics?.test_accuracy_mean ?? 0.956;
+  // Everything below comes from the backend's verified comparison. Nothing is invented.
+  //
+  // This block previously read:
+  //     const runFinalMetric = runFinal?.metrics?.test_accuracy_mean ?? 0.956;
+  // so a run that crashed and produced no metrics displayed the benchmark's expected answer
+  // as its "observed mean", with an absolute gap of 0.0000 and a hardcoded "WITHIN TOLERANCE"
+  // status. The page asserted a successful reproduction of a run that never executed.
+  const comparisonPoints = report.runs_summary?.comparison_chart ?? [];
+  const metricKey = claim?.metric ?? claim?.result_key ?? 'metric';
+  const reportedTarget = claim?.reported ?? null;
+  const toleranceValue = claim?.tolerance?.value ?? null;
+  const toleranceLabel =
+    toleranceValue === null
+      ? 'unspecified'
+      : claim?.tolerance?.type === 'rel'
+      ? `± ${(toleranceValue * 100).toFixed(2)}%`
+      : `± ${toleranceValue.toFixed(4)}`;
 
-  const chartData = [
-    {
-      name: 'Run 1 (Unpatched)',
-      accuracy: Number(Number(run1Metric).toFixed(4)),
-      target: reportedTarget,
-    },
-    {
-      name: `Run ${attempts.length || 1} (Final Patched)`,
-      accuracy: Number(Number(runFinalMetric).toFixed(4)),
-      target: reportedTarget,
-    },
-  ];
+  const finalPoint = comparisonPoints.length ? comparisonPoints[comparisonPoints.length - 1] : null;
+  const observedFinal = finalPoint?.observed ?? null;
+  const absGap =
+    observedFinal !== null && reportedTarget !== null ? Math.abs(observedFinal - reportedTarget) : null;
+
+  const fmt = (v: number | null, digits = 4) => (v === null ? '—' : v.toFixed(digits));
+
+  // Crashed attempts are omitted from the chart rather than plotted as a fabricated value.
+  const chartData = comparisonPoints
+    .filter((p) => p.observed !== null)
+    .map((p) => ({
+      name: `Run ${p.run_n}`,
+      accuracy: Number(Number(p.observed).toFixed(4)),
+      target: reportedTarget ?? undefined,
+    }));
+
+  const crashedRuns = comparisonPoints.filter((p) => p.observed === null);
+
+  const statusCell = (within: boolean | null) =>
+    within === true
+      ? { text: 'WITHIN TOLERANCE', cls: 'text-emerald-700' }
+      : within === false
+      ? { text: 'OUTSIDE TOLERANCE', cls: 'text-red-700' }
+      : { text: 'NOT MEASURED', cls: 'text-amber-800' };
 
   const handleCopyMarkdown = () => {
     const md = `# Reproduction Report: ${report.benchmark_id}\nStatus: ${report.status}\nReason: ${report.reason}\nAfter Patches: ${report.after_n_fixes}\n`;
@@ -223,7 +247,7 @@ export const Report: React.FC = () => {
                 />
                 <Legend />
                 <ReferenceLine
-                  y={reportedTarget}
+                  y={reportedTarget ?? undefined}
                   stroke="#B8572F"
                   strokeDasharray="6 4"
                   strokeWidth={1.5}
@@ -253,7 +277,7 @@ export const Report: React.FC = () => {
                           fontFamily="JetBrains Mono, monospace"
                           fontWeight="bold"
                         >
-                          Paper Target: {reportedTarget.toFixed(4)}
+                          Paper Target: {fmt(reportedTarget)}
                         </text>
                       </g>
                     );
@@ -285,18 +309,66 @@ export const Report: React.FC = () => {
               </thead>
               <tbody className="divide-y divide-[#CDC5B4]/50">
                 <tr>
-                  <td className="py-2.5 px-3 font-semibold text-[#1F2A44]">test_accuracy</td>
-                  <td className="py-2.5 px-3 text-amber-800 font-bold">{reportedTarget.toFixed(4)}</td>
-                  <td className="py-2.5 px-3 text-[#4A5470]">± 0.0100</td>
-                  <td className="py-2.5 px-3 text-rust font-bold">{runFinalMetric.toFixed(4)}</td>
-                  <td className="py-2.5 px-3 font-mono text-[#1F2A44]">
-                    {Math.abs(runFinalMetric - reportedTarget).toFixed(4)}
+                  <td className="py-2.5 px-3 font-semibold text-[#1F2A44]">{metricKey}</td>
+                  <td className="py-2.5 px-3 text-amber-800 font-bold">{fmt(reportedTarget)}</td>
+                  <td className="py-2.5 px-3 text-[#4A5470]">{toleranceLabel}</td>
+                  <td className="py-2.5 px-3 text-rust font-bold">
+                    {observedFinal === null ? 'not measured' : fmt(observedFinal)}
                   </td>
-                  <td className="py-2.5 px-3 text-emerald-700 font-bold">WITHIN TOLERANCE</td>
+                  <td className="py-2.5 px-3 font-mono text-[#1F2A44]">{fmt(absGap)}</td>
+                  <td
+                    className={`py-2.5 px-3 font-bold ${statusCell(finalPoint?.within_tolerance ?? null).cls}`}
+                  >
+                    {statusCell(finalPoint?.within_tolerance ?? null).text}
+                  </td>
                 </tr>
               </tbody>
             </table>
           </div>
+
+          {/* Per-attempt detail, including attempts that produced no metric at all. */}
+          {comparisonPoints.length > 0 && (
+            <div className="overflow-x-auto pt-4 border-t border-[#CDC5B4]">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-[#CDC5B4] text-[#4A5470] text-[11px] uppercase tracking-wider">
+                    <th className="py-2 px-3">Attempt</th>
+                    <th className="py-2 px-3">Exit Code</th>
+                    <th className="py-2 px-3">Observed</th>
+                    <th className="py-2 px-3">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#CDC5B4]/50">
+                  {comparisonPoints.map((pt) => {
+                    const st = statusCell(pt.within_tolerance);
+                    return (
+                      <tr key={pt.run_n}>
+                        <td className="py-2.5 px-3 font-semibold text-[#1F2A44]">Run {pt.run_n}</td>
+                        <td
+                          className={`py-2.5 px-3 font-mono font-bold ${
+                            pt.exit_code === 0 ? 'text-emerald-700' : 'text-red-700'
+                          }`}
+                        >
+                          {pt.exit_code === null ? 'killed' : pt.exit_code}
+                        </td>
+                        <td className="py-2.5 px-3 font-mono text-[#1F2A44]">
+                          {pt.observed === null ? 'no metric produced' : fmt(pt.observed)}
+                        </td>
+                        <td className={`py-2.5 px-3 font-bold ${st.cls}`}>{st.text}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {crashedRuns.length > 0 && (
+                <p className="pt-3 text-[11px] text-amber-800 font-mono">
+                  {crashedRuns.length} attempt{crashedRuns.length === 1 ? '' : 's'} produced no
+                  metric and {crashedRuns.length === 1 ? 'is' : 'are'} omitted from the chart
+                  above rather than plotted as a value.
+                </p>
+              )}
+            </div>
+          )}
         </section>
 
         {/* SECTION 2: RUNS AND PATCHES TABLE */}
@@ -321,7 +393,19 @@ export const Report: React.FC = () => {
                         {p.risk_class}
                       </span>
                     </div>
-                    <span className="text-emerald-700 font-bold">Applied & Verified</span>
+                    {/* Reflect the patch's real status. This was hardcoded "Applied & Verified",
+                        so a dropped, rejected or reverted patch was presented as applied. */}
+                    <span
+                      className={`font-bold uppercase tracking-wider ${
+                        p.status === 'applied'
+                          ? 'text-emerald-700'
+                          : p.status === 'rejected' || p.status === 'reverted' || p.status === 'dropped'
+                          ? 'text-red-700'
+                          : 'text-amber-800'
+                      }`}
+                    >
+                      {p.status === 'applied' ? 'Applied & Verified' : p.status ?? 'unknown'}
+                    </span>
                   </div>
 
                   <p className="text-[#1F2A44] font-sans text-xs">{p.rationale}</p>
@@ -337,8 +421,15 @@ export const Report: React.FC = () => {
                 </div>
               ))}
             </div>
-          ) : (
+          ) : report.status === 'REPRODUCED' ? (
             <p className="text-[#4A5470]">Zero patches were required; code reproduced out of the box.</p>
+          ) : (
+            <p className="text-[#4A5470]">
+              No patch was applied. The verdict is{' '}
+              <span className="font-bold text-rust">{report.status}</span>
+              {report.reason ? `: ${report.reason}` : ''}. An empty patch list does not mean the
+              reproduction succeeded.
+            </p>
           )}
         </section>
 

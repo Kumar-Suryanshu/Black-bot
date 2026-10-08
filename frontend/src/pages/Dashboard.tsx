@@ -155,7 +155,10 @@ export const Dashboard: React.FC = () => {
     );
   }
 
-  const isReportReady = state?.phase === 'DONE' || Boolean(state?.final);
+  // Offer the report the moment one exists. Gating on phase === 'DONE' meant the operator
+  // waited through the optional statement-enrichment call with no way to reach the report.
+  const isReportReady =
+    state?.phase === 'DONE' || Boolean(state?.report_available) || Boolean(state?.final);
   const activePatch =
     state?.patches && state.patches.length > 0
       ? state.patches[state.patches.length - 1]

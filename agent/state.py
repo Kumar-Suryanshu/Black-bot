@@ -181,6 +181,9 @@ class ProjectState(BaseModel):
     provisioning_approved: bool = False
     pending: dict | None = None
     final: dict | None = None
+    # Tool calls the orchestrator refused, with the reason. Fed back to the Solver so it can
+    # change course instead of proposing the same refused action every step.
+    rejected_actions: list[dict] = Field(default_factory=list)
     llm_call_metadata: list[dict] = Field(default_factory=list)
 
 class Event(BaseModel):

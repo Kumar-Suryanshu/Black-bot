@@ -112,6 +112,36 @@ def resolve_attempt_log(state: ProjectState, deps: dict, attempt_num: Optional[i
             return c
     return None
 
+# How many times the same refused action is tolerated before the orchestrator stops asking
+# and moves the run on. Without this, a Solver that keeps proposing a disallowed tool call
+# (e.g. "pip install PyYAML", which must go through a dependency patch) burns every remaining
+# diagnose step re-proposing it, because nothing told it the call was refused.
+MAX_IDENTICAL_REJECTIONS = 2
+
+def record_rejected_action(state: ProjectState, tool: str, detail: str, guidance: str) -> int:
+    """
+    Records a refused tool call and returns how many times this exact call has been refused.
+    The record is fed back to the Solver in the next diagnose payload.
+    """
+    signature = f"{tool}|{detail}"
+    for entry in state.rejected_actions:
+        if entry.get("signature") == signature:
+            entry["count"] = entry.get("count", 1) + 1
+            entry["guidance"] = guidance
+            return entry["count"]
+
+    state.rejected_actions.append({
+        "signature": signature,
+        "tool": tool,
+        "detail": detail,
+        "guidance": guidance,
+        "count": 1,
+    })
+    # Keep the feedback window small; only recent refusals are useful context.
+    if len(state.rejected_actions) > 10:
+        del state.rejected_actions[:-10]
+    return 1
+
 def guard_budgets(state: ProjectState) -> bool:
     if state.phase in ("STATUS", "REPORT", "REPORT_REVIEW", "DONE"):
         return False
@@ -316,10 +346,33 @@ def handle_plan(state: ProjectState, deps: dict):
 def handle_preflight(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
     ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
-    res = preflight_check(ws, state.repo_profile, gpu_enabled=False, gpu_usable=False)
+    # Reflect the real host. These were hardcoded False, so a GPU repository was blocked even
+    # on a machine with a working GPU and GPU_ENABLED=true.
+    from sandbox.limits import get_limits
+    limits = get_limits()
+    gpu_enabled = limits.gpu_enabled
+    if gpu_enabled:
+        from sandbox.manager import probe_gpu
+        gpu_info = probe_gpu()
+    else:
+        gpu_info = {
+            "usable": False,
+            "reason": "GPU mode is disabled (set GPU_ENABLED=true to opt in)",
+        }
+
+    res = preflight_check(
+        ws, state.repo_profile,
+        gpu_enabled=gpu_enabled,
+        gpu_usable=bool(gpu_info.get("usable")),
+        gpu_detail=str(gpu_info.get("reason", "")),
+    )
     state.preflight = res
     if res["blockers"]:
-        # Record blocker evidence
+        if "gpu_required" in res["blockers"]:
+            emit_event(
+                state, "system", "gpu_unavailable",
+                f"Repository requires a GPU; sandbox cannot provide one: {res.get('gpu_detail', '')}"
+            )
         state.phase = "STATUS"
         return
 
@@ -574,6 +627,17 @@ def handle_diagnose(state: ProjectState, deps: dict):
             {
                 "state_summary": f"Step {step_num}, silent_divergence={silent_div}",
                 "observation": obs_text,
+                # Refused calls from earlier steps. Without this the Solver has no way to know
+                # a call was rejected and simply proposes it again.
+                "refused_actions": [
+                    {
+                        "tool": r.get("tool"),
+                        "why_refused": r.get("detail"),
+                        "do_this_instead": r.get("guidance"),
+                        "times_refused": r.get("count", 1),
+                    }
+                    for r in state.rejected_actions[-5:]
+                ],
                 "allowed_tools": [
                     {"name": "inspect_file"},
                     {"name": "search_repository"},
@@ -613,7 +677,28 @@ def handle_diagnose(state: ProjectState, deps: dict):
             if has_confirmed:
                 state.phase = "PATCH_PROPOSE"
             else:
-                emit_event(state, "solver", "error", "propose_patch rejected: no confirmed hypothesis with >= 1 evidence ID")
+                guidance = (
+                    "Before proposing a patch, confirm a hypothesis: set its status to "
+                    "'confirmed' and cite at least one evidence ID that already exists in the "
+                    "ledger. Use inspect_file, read_logs or inspect_error to obtain one."
+                )
+                count = record_rejected_action(
+                    state, "propose_patch",
+                    "propose_patch rejected: no confirmed hypothesis with >= 1 evidence ID",
+                    guidance
+                )
+                emit_event(
+                    state, "solver", "error",
+                    f"propose_patch rejected: no confirmed hypothesis with >= 1 evidence ID "
+                    f"(refused {count}x). {guidance}"
+                )
+                if count >= MAX_IDENTICAL_REJECTIONS:
+                    emit_event(
+                        state, "system", "action_refused_repeatedly",
+                        f"Refused propose_patch {count} times without a confirmed hypothesis; concluding"
+                    )
+                    state.phase = "STATUS"
+                    return
                 if step_num >= DIAGNOSE_STEPS_MAX:
                     state.phase = "STATUS"
         elif action_tool == "conclude_no_cause":
@@ -655,7 +740,34 @@ def handle_diagnose(state: ProjectState, deps: dict):
                     else:
                         emit_event(state, "tool", "tool_finished", f"Ran {cmd} but no log produced")
                 else:
-                    emit_event(state, "solver", "error", f"Command not allowed: {cmd}")
+                    if cmd_trim.startswith(("pip install", "pip3 install", "python -m pip install")):
+                        guidance = (
+                            "The sandbox runs offline and read-only, so packages cannot be "
+                            "installed ad hoc. Propose a patch of type 'dependency' that edits "
+                            "requirements.txt with an exact '==' pin instead; the orchestrator "
+                            "reinstalls from the offline wheelhouse after the patch is approved."
+                        )
+                    else:
+                        guidance = (
+                            "Only read-only inspection commands are permitted: pip list, "
+                            "pip show, python -c, ls, cat. Use inspect_file, read_logs or "
+                            "search_repository to gather evidence."
+                        )
+                    count = record_rejected_action(state, "run_command", f"Command not allowed: {cmd}", guidance)
+                    emit_event(
+                        state, "solver", "error",
+                        f"Command not allowed: {cmd} (refused {count}x). {guidance}"
+                    )
+                    if count >= MAX_IDENTICAL_REJECTIONS:
+                        emit_event(
+                            state, "system", "action_refused_repeatedly",
+                            f"Refused the same command {count} times; moving on instead of re-asking"
+                        )
+                        has_confirmed = any(
+                            h.status == "confirmed" and len(h.evidence) >= 1 for h in state.hypotheses
+                        )
+                        state.phase = "PATCH_PROPOSE" if has_confirmed else "STATUS"
+                        return
             if step_num >= DIAGNOSE_STEPS_MAX:
                 state.phase = "STATUS"
         elif action_tool == "inspect_file":
@@ -925,6 +1037,33 @@ def handle_status(state: ProjectState, deps: dict):
 
 def handle_report(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
+
+    # The report is produced in two stages. The deterministic report needs no model at all, so
+    # build and persist it FIRST: previously the whole report was gated behind the optional
+    # write_report call, and a rate-limited provider (429 backoff, retries, then fallback)
+    # could leave the operator staring at an empty console for minutes with nothing saved.
+    base_report = generate_report(state)
+    if state.final is None:
+        state.final = {}
+    state.final["report"] = base_report
+    deps["report"] = base_report
+
+    try:
+        from backend.app.db import save_project_state
+        save_project_state(
+            "data/rerun.db", state.project_id, state.benchmark_id, state.repo_commit,
+            state.final.get("status", state.phase), state
+        )
+    except Exception:
+        pass
+
+    emit_event(
+        state, "system", "report_available",
+        "Deterministic report generated and saved; statement enrichment is optional"
+    )
+
+    # Optional enrichment. Capped retries so an unavailable provider cannot stall the run;
+    # the report above already stands on its own if this fails.
     raw_statements = []
     try:
         rep_out = llm_call(
@@ -937,6 +1076,7 @@ def handle_report(state: ProjectState, deps: dict):
             },
             WriteReportOutput,
             benchmark_id=state.benchmark_id,
+            max_retries=1,
             task_prompt=WRITE_REPORT_PROMPT
         )
         if rep_out and hasattr(rep_out, "statements"):
@@ -945,12 +1085,12 @@ def handle_report(state: ProjectState, deps: dict):
     except Exception as e:
         emit_event(state, "solver", "warning", f"Write report skipped or failed: {str(e)}")
 
-    # Deterministic report generation & verification
-    report_data = generate_report(state, raw_statements=raw_statements)
-    if state.final is None:
-        state.final = {}
-    state.final["report"] = report_data
-    deps["report"] = report_data
+    report_data = base_report
+    if raw_statements:
+        report_data = generate_report(state, raw_statements=raw_statements)
+        state.final["report"] = report_data
+        deps["report"] = report_data
+
     emit_event(
         state, "solver", "report_ready",
         f"Generated report: {report_data['verification_summary']['summary_text']}",

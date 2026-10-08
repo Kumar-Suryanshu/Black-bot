@@ -253,7 +253,17 @@ def get_project(id: str):
         "attempts": [a.model_dump() for a in state.attempts],
         "patches": [p.model_dump() for p in state.patches],
         "provisioning_plan": state.provisioning_plan,
-        "status": state.final.get("status") if state.final else state.phase
+        "status": state.final.get("status") if state.final else state.phase,
+        # Lets the console offer the report as soon as one exists, rather than waiting for the
+        # phase to reach DONE behind an optional LLM enrichment call.
+        "report_available": bool(state.final and state.final.get("report")),
+        "final": state.final.get("status") and {
+            "status": state.final.get("status"),
+            "reason": state.final.get("reason", ""),
+            "after_n_fixes": state.final.get("after_n_fixes", 0),
+        } if state.final else None,
+        "unresolved_issues": state.unresolved_issues,
+        "preflight": state.preflight
     }
 
 @router.get("/api/projects/{id}/claims-draft")

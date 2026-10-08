@@ -298,9 +298,34 @@ export const NewProject: React.FC = () => {
     }
   };
 
+  // A triage verdict that reports blockers means the planned command cannot execute in the
+  // sandbox: a notebook-only repository has no runnable script, a repository with missing
+  // local modules or syntax errors cannot import, and a hard GPU requirement cannot be met.
+  // Launching anyway only produces a guaranteed UNABLE_TO_EXECUTE, so the launch is blocked
+  // and the reason is shown. "Triage Only" remains available.
+  const TRIAGE_BLOCKING_VERDICTS = [
+    'UNSUPPORTED_FORMAT',
+    'INCOMPLETE_REPO',
+    'NEEDS_GPU',
+    'NEEDS_LARGE_RESOURCES',
+  ];
+  const triageBlockers: string[] = triageReport?.blockers ?? [];
+  const isTriageBlocked = Boolean(
+    triageReport &&
+      (TRIAGE_BLOCKING_VERDICTS.includes(triageReport.verdict) || triageBlockers.length > 0)
+  );
+  const triageBlockReason: string =
+    triageReport?.reason || (triageBlockers.length ? triageBlockers.join(', ') : '');
+
   // Step 2 Confirm Claims
   const handleConfirmClaims = async () => {
     if (!projectId) return;
+    if (isTriageBlocked) {
+      setGeneralError(
+        `Cannot launch: triage reported ${triageReport?.verdict}. ${triageBlockReason}`
+      );
+      return;
+    }
     setSubmittingConfirm(true);
     try {
       const confirmedClaims = claims.map((c) => ({
@@ -934,6 +959,21 @@ export const NewProject: React.FC = () => {
                     />
                   </div>
 
+                  {/* Triage block notice */}
+                  {isTriageBlocked && (
+                    <div className="p-4 rounded-lg bg-red-50 border-2 border-red-300 text-red-900 font-mono text-xs space-y-1.5">
+                      <div className="font-bold uppercase tracking-wider">
+                        Execution blocked: {triageReport?.verdict}
+                      </div>
+                      <p className="leading-relaxed">{triageBlockReason}</p>
+                      <p className="text-[11px] text-red-800">
+                        This repository cannot be executed in the sandbox, so launching would
+                        only produce an UNABLE_TO_EXECUTE verdict. Use “Triage Only” to keep
+                        the feasibility report.
+                      </p>
+                    </div>
+                  )}
+
                   {/* Actions Bar */}
                   <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-6 border-t border-kraft/60">
                     <button
@@ -958,14 +998,25 @@ export const NewProject: React.FC = () => {
                       <button
                         type="button"
                         onClick={handleConfirmClaims}
-                        disabled={submittingConfirm}
-                        className="w-full sm:w-auto flex items-center justify-center gap-2 px-8 py-3.5 rounded-sm bg-rust hover:bg-[#A34B26] text-[#FAF7F0] font-bold text-xs uppercase tracking-[0.2em] border border-l-4 border-l-[#7A3317] shadow-xl transition-all disabled:opacity-50"
+                        disabled={submittingConfirm || isTriageBlocked}
+                        title={
+                          isTriageBlocked
+                            ? `Blocked by triage: ${triageReport?.verdict}. ${triageBlockReason}`
+                            : undefined
+                        }
+                        className="w-full sm:w-auto flex items-center justify-center gap-2 px-8 py-3.5 rounded-sm bg-rust hover:bg-[#A34B26] text-[#FAF7F0] font-bold text-xs uppercase tracking-[0.2em] border border-l-4 border-l-[#7A3317] shadow-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-rust"
                         style={{
                           clipPath: 'polygon(0% 2px, 2px 0%, calc(100% - 2px) 0%, 100% 2px, 100% calc(100% - 2px), calc(100% - 2px) 100%, 2px 100%, 0% calc(100% - 2px))',
                         }}
                       >
                         <Send className="w-4 h-4 text-[#FAF7F0]" />
-                        <span>{submittingConfirm ? 'Confirming...' : 'Confirm Claims & Launch Run →'}</span>
+                        <span>
+                          {isTriageBlocked
+                            ? 'Launch Blocked by Triage'
+                            : submittingConfirm
+                            ? 'Confirming...'
+                            : 'Confirm Claims & Launch Run →'}
+                        </span>
                       </button>
                     </div>
                   </div>

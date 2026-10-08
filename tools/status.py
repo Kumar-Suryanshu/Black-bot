@@ -26,11 +26,19 @@ def compute_status(state):
     if env_failed:
         triage_verdict = state.preflight.get("triage_verdict")
         reason = triage_verdict if triage_verdict and triage_verdict != "FEASIBLE" else (preflight_blockers[0] if preflight_blockers else "unknown environment error")
+
+        # Say why, not just what. A bare "NEEDS_GPU" / "resources unavailable" leaves the
+        # operator unable to tell a missing driver from a disabled feature flag.
+        detail = state.preflight.get("gpu_detail") if "gpu_required" in preflight_blockers else None
+        if detail:
+            reason = f"{reason}: {detail}"
+
         return {
             "status": "UNABLE_TO_EXECUTE",
             "reason": reason,
             "after_n_fixes": 0,
-            "confidence_factors": {}
+            "confidence_factors": {},
+            "blockers": preflight_blockers
         }
         
     primary_claims = [c for c in state.claims if c.primary and c.confirmed_by_human]

@@ -145,6 +145,16 @@ export interface ProjectStateSummary {
   attempts: Attempt[];
   patches: Patch[];
   status?: string;
+  // True as soon as a report exists, so the console can offer it without waiting for the
+  // phase to reach DONE behind an optional LLM enrichment call.
+  report_available?: boolean;
+  preflight?: {
+    blockers: string[];
+    warnings: string[];
+    triage_verdict?: string;
+    triage_reason?: string;
+    gpu_detail?: string;
+  } | null;
   claims?: Claim[];
   paper_settings?: PaperSetting[];
   plan?: Plan | null;
@@ -216,9 +226,29 @@ export interface ReportStatement {
   evidence: string[];
 }
 
+export interface RunComparisonPoint {
+  attempt: string;
+  run_n: number;
+  observed: number | null;
+  reported: number | null;
+  tolerance: number;
+  exit_code: number | null;
+  within_tolerance: boolean | null;
+}
+
+export interface RunsSummary {
+  total_runs: number;
+  unpatched_run: { run: number; exit_code: number | null; metrics: Record<string, any>; within_tolerance: boolean | null } | null;
+  final_run: { run: number; exit_code: number | null; metrics: Record<string, any>; within_tolerance: boolean | null } | null;
+  comparison_chart: RunComparisonPoint[];
+}
+
 export interface ReportData {
   project_id: string;
   benchmark_id: string;
+  // The backend's verified per-attempt comparison. The report UI must render these rather
+  // than deriving its own numbers, which is how a crashed run came to display a pass.
+  runs_summary?: RunsSummary;
   status: 'REPRODUCED' | 'PARTIALLY_REPRODUCED' | 'NOT_REPRODUCED' | 'UNABLE_TO_EXECUTE' | 'INCONCLUSIVE';
   reason: string;
   after_n_fixes: number;
