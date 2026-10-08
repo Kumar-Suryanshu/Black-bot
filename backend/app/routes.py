@@ -22,8 +22,40 @@ router = APIRouter()
 
 @router.get("/api/health", response_model=HealthResponse)
 def health_check():
-    # Basic check, returning True to satisfy Stage 9
-    return HealthResponse(ok=True, docker=True, llm_primary=True, llm_fallback=True)
+    import docker
+    from pathlib import Path
+    
+    docker_ok = False
+    image_ok = False
+    try:
+        client = docker.from_env()
+        client.ping()
+        docker_ok = True
+        try:
+            client.images.get("rerun-base:py311")
+            image_ok = True
+        except Exception:
+            image_ok = False
+    except Exception:
+        docker_ok = False
+
+    wheelhouse_ok = len(list(Path("wheelhouse").glob("*.whl"))) > 0
+    sandbox_type = os.getenv("SANDBOX_TYPE", "docker")
+    
+    from agent.config import SOLVER_API_KEY
+    llm_primary = bool(SOLVER_API_KEY or os.getenv("GEMINI_API_KEY") or os.getenv("LLM_MODE") == "replay")
+    llm_fallback = bool(os.getenv("FALLBACK_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("LLM_MODE") == "replay")
+    
+    ok = (docker_ok or sandbox_type == "fake") and (image_ok or sandbox_type == "fake")
+    return HealthResponse(
+        ok=ok,
+        docker=docker_ok,
+        image_present=image_ok,
+        wheelhouse_ready=wheelhouse_ok,
+        sandbox_type=sandbox_type,
+        llm_primary=llm_primary,
+        llm_fallback=llm_fallback
+    )
 
 @router.get("/api/benchmarks")
 def get_benchmarks():

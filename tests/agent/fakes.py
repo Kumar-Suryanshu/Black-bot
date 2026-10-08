@@ -183,6 +183,116 @@ def get_fake_script_b2() -> list:
     ]
 
 
+def get_fake_script_b3() -> list:
+    """Script for B3 Silent Config Case: bad learning rate."""
+    return [
+        # 1. extract_claims
+        ("solver", "extract_claims", {
+            "claims": [{
+                "statement": "We achieved a test accuracy of 0.956",
+                "metric": "test_accuracy",
+                "dataset": "digits",
+                "reported": 0.956,
+                "tolerance": {"type": "abs", "value": 0.01},
+                "result_key": "test_accuracy_mean",
+                "source_ref": "p.1",
+                "source_quote": "test accuracy of 0.956"
+            }],
+            "paper_settings": [{
+                "key": "learning_rate",
+                "value": 0.5,
+                "source_ref": "p.1",
+                "source_quote": "learning rate = 0.5"
+            }],
+            "ambiguities": []
+        }),
+        # 2. plan_experiment
+        ("solver", "plan_experiment", {
+            "command": "python train.py --config configs/default.yaml",
+            "config_file": "configs/default.yaml",
+            "output_file": "outputs/results.json",
+            "effective_config_file": "outputs/effective_config.json",
+            "seeds": [0, 1, 2, 3, 4],
+            "claim_result_keys": {"C-1": "test_accuracy_mean"},
+            "notes": "Standard plan"
+        }),
+        # 3. diagnose_step: inspect_file
+        ("solver", "diagnose_step", {
+            "reason": "Accuracy is too low. Let's inspect the config file.",
+            "hypotheses": [],
+            "next_action": {
+                "tool": "inspect_file",
+                "args": {"file": "configs/default.yaml"}
+            }
+        }),
+        # 4. diagnose_step: propose_patch
+        ("solver", "diagnose_step", {
+            "reason": "Config has lr=0.01 but paper says 0.5.",
+            "hypotheses": [{
+                "id": "H-1",
+                "text": "Learning rate mismatch",
+                "status": "confirmed",
+                "evidence": ["E-001"],
+                "tested_with": ["inspect_file"],
+                "error_class": "config_mismatch"
+            }],
+            "next_action": {
+                "tool": "propose_patch",
+                "args": {}
+            }
+        }),
+        # 5. propose_patch
+        ("solver", "propose_patch", {
+            "hypothesis_id": "H-1",
+            "type": "config_value",
+            "rationale": "Paper specifies lr=0.5 but config uses 0.01",
+            "evidence": ["E-001"],
+            "alternatives_considered": [],
+            "edits": [{
+                "file": "configs/default.yaml",
+                "op": "replace_text",
+                "old": "learning_rate: 0.01",
+                "new": "learning_rate: 0.5"
+            }]
+        }),
+        # 6. Critic patch_review
+        ("critic", "patch_review", {
+            "id": "R-1",
+            "patch_id": "P-1",
+            "round": 1,
+            "verdict": "SUPPORTED",
+            "checks": {
+                "cause_is_cited_and_exists": True,
+                "evidence_actually_supports_cause": True,
+                "change_is_minimal": True,
+                "files_in_scope": True,
+                "not_metric_chasing": True,
+                "value_has_paper_or_error_provenance": True,
+                "no_change_to_evaluation_or_data_semantics": True,
+                "alternative_explanations_considered": True,
+                "reversible_and_smoke_testable": True
+            },
+            "verified_evidence": [{"id": "E-001", "what_i_found": "learning_rate: 0.01"}],
+            "objections": [],
+            "required_changes": [],
+            "confidence": "high",
+            "model": "fake"
+        }),
+        # 7. write_report
+        ("solver", "write_report", {
+            "statements": [
+                {
+                    "id": "S-1",
+                    "section": "findings",
+                    "kind": "finding",
+                    "confidence": "confirmed",
+                    "text": "Reproduction succeeded after applying 1 config patch.",
+                    "evidence": ["E-001"]
+                }
+            ]
+        })
+    ]
+
 def get_fake_script_b4_combined() -> list:
     """Script for B4 Combined Case: missing PyYAML AND bad learning rate."""
     return [

@@ -178,6 +178,8 @@ def call(
     cassettes, secret scrubbing, and provider fallback.
     """
     system_preamble = SOLVER_PREAMBLE if role == "solver" else CRITIC_PREAMBLE
+    schema_str = json.dumps(out_model.model_json_schema(), indent=2)
+    system_preamble += f"\n\nYou must return a valid JSON object strictly conforming to this JSON Schema:\n{schema_str}"
     user_prompt = f"Mode: {mode}\nPayload:\n{json.dumps(wrap_untrusted(payload), indent=2)}"
     
     current_llm_mode = LLM_MODE

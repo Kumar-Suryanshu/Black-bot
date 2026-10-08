@@ -1,11 +1,26 @@
 # Rerun Implementation Progress
 
-> **Team Plan:** See [`TEAM_PLAN.md`](file:///c:/Users/LENOVO/OneDrive/Desktop/Black-bot/TEAM_PLAN.md) for phase breakdown, track assignments, and collaboration guide.
-> **Build Spec:** [`rerun_antigravity_build_prompt.md`](file:///c:/Users/LENOVO/OneDrive/Desktop/Black-bot/rerun_antigravity_build_prompt.md) · **Guide:** [`rerun_project_guide.md`](file:///c:/Users/LENOVO/OneDrive/Desktop/Black-bot/rerun_project_guide.md)
+> **Team Plan:** See [`TEAM_PLAN.md`](TEAM_PLAN.md) for phase breakdown, track assignments, and collaboration guide.
+> **Build Spec:** [`Rerun_Antigravity_Build_Prompt.md`](Rerun_Antigravity_Build_Prompt.md) · **Guide:** [`Rerun_Project_Guide.md`](Rerun_Project_Guide.md)
+> **Completion Plan:** [`docs/COMPLETION_PLAN.md`](docs/COMPLETION_PLAN.md) · **Audit:** [`docs/baseline_audit.md`](docs/baseline_audit.md)
 
 ---
 
-## Stage Gates and Deliverables
+## Completion Plan Stage Gates
+
+- [x] **Stage 0 (Completion Plan)**: Baseline lock & truth audit
+  - *Branch:* `completion/stage-0`
+  - *Gate Run Results:* PASS (75 passed, 1 xfailed in `tests/`; all 25 defects D1–D25 confirmed in `docs/baseline_audit.md`; failing baseline test `test_default_sandbox_is_real.py` added)
+  - *Status:* PASS
+
+- [x] **Stage 1 (Completion Plan)**: Make the live path real (R0)
+  - *Branch:* `completion/stage-1`
+  - *Gate Run Results:* PASS (All 5 benchmark cases `b1_control`, `b2_dependency`, `b3_silent_config`, `b4_combined`, `b5_unable` run in real Docker containers via `DockerSandbox` with base image `rerun-base:py311`; `b1` reproduced with 0 patches; `b2` failed on real `ModuleNotFoundError: No module named 'yaml'`, proposed P-1 PyYAML==6.0.1, offline wheelhouse installed, run 2 reproduced; `b3` executed at calibrated bad accuracy 0.8733, proposed P-1 learning_rate: 0.5, run 2 reproduced at 0.9556; `b4` applied dependency patch then config patch, reproduced at 0.9556; `b5` blocked at preflight `gpu_required` -> `UNABLE_TO_EXECUTE`; 0 occurrences of "Execution completed successfully" in Stage 1 runs; `test_default_sandbox_is_real.py` passed; API startup refuses fake sandbox without `ALLOW_FAKE_SANDBOX=1`; all proof recorded in `docs/real_run_proof.md`; full test suite passes 82 tests).
+  - *Status:* PASS — waiting for go-ahead for Stage 2.
+
+---
+
+## Initial Build Stage Gates and Deliverables
 
 - [x] **Stage 0**: Bootstrap & machine readiness
   - *Owner:* —

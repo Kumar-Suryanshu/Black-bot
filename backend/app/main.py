@@ -21,5 +21,9 @@ app.include_router(router)
 
 @app.on_event("startup")
 def startup_event():
+    import os
+    sandbox_type = os.getenv("SANDBOX_TYPE", "docker")
+    if sandbox_type == "fake" and os.getenv("ALLOW_FAKE_SANDBOX") != "1":
+        raise RuntimeError("Refusing to start API with SANDBOX_TYPE=fake without ALLOW_FAKE_SANDBOX=1.")
     init_db()
 

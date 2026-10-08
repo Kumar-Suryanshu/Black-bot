@@ -42,47 +42,29 @@ from tools.exec_tools import query_package_index
 from tools.report import generate_report
 from agent.critic.schemas import ReportReviewOutput
 
-class FakeSandbox:
-    """Mock sandbox execution for deterministic unit & agent testing."""
-    def __init__(self):
-        self.canned_runs = {}
+# Re-export FakeSandbox for backward compatibility with existing tests
+from sandbox.fake import FakeSandbox
 
-    def register(self, case_id: str, run_n: int, exit_code: int, logs: str, outputs: dict):
-        self.canned_runs[(case_id, run_n)] = (exit_code, logs, outputs)
-
-    def execute(self, state: ProjectState, workspace: str, command: str, kind: str, n: int):
-        case_id = state.benchmark_id
-        if (case_id, n) in self.canned_runs:
-            exit_code, logs, outputs = self.canned_runs[(case_id, n)]
-        else:
-            # Default success
-            exit_code, logs, outputs = 0, "Execution completed successfully", {
-                "test_accuracy_mean": 0.956,
-                "test_accuracy_per_seed": [0.955, 0.957, 0.956, 0.956, 0.956],
-                "test_accuracy_std": 0.001
-            }
-
-        ws = Path(workspace)
-        log_dir = ws / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        log_file = log_dir / f"{kind}_{n}.log"
-        log_file.write_text(logs, encoding="utf-8")
-
-        out_dir = ws / "outputs"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        res_file = out_dir / "results.json"
-        res_file.write_text(json.dumps(outputs), encoding="utf-8")
-
-        return exit_code, str(log_file), str(out_dir)
-
-_GLOBAL_SANDBOX = FakeSandbox()
+_OVERRIDE_SANDBOX = None
 
 def get_sandbox():
-    return _GLOBAL_SANDBOX
+    """Returns the active sandbox: DockerSandbox by default, or FakeSandbox if SANDBOX_TYPE=fake."""
+    global _OVERRIDE_SANDBOX
+    if _OVERRIDE_SANDBOX is not None:
+        return _OVERRIDE_SANDBOX
+        
+    sandbox_type = os.getenv("SANDBOX_TYPE", "docker")
+    if sandbox_type == "fake":
+        from sandbox.fake import FakeSandbox
+        _OVERRIDE_SANDBOX = FakeSandbox()
+        return _OVERRIDE_SANDBOX
+    from sandbox.docker_sandbox import DockerSandbox
+    return DockerSandbox()
 
 def set_sandbox(sb):
-    global _GLOBAL_SANDBOX
-    _GLOBAL_SANDBOX = sb
+    """Override the active sandbox instance (used by test fixtures)."""
+    global _OVERRIDE_SANDBOX
+    _OVERRIDE_SANDBOX = sb
 
 def guard_budgets(state: ProjectState) -> bool:
     if state.phase in ("STATUS", "REPORT", "REPORT_REVIEW", "DONE"):
@@ -250,7 +232,30 @@ def handle_preflight(state: ProjectState, deps: dict):
 
 def handle_setup(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
-    # Setup offline dependency install
+    ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
+    sb = deps.get("sandbox", get_sandbox())
+    
+    req_file = Path(ws) / "requirements.txt"
+    if req_file.exists():
+        exit_code, log_path, res = sb.install(state, ws, len(state.attempts) + 1)
+        if log_path:
+            deps["latest_log_path"] = log_path
+        if exit_code != 0:
+            emit_event(state, "system", "setup_failed", f"Setup dependency install failed with exit code {exit_code}")
+            att = Attempt(
+                n=len(state.attempts) + 1,
+                patches_applied=[p.id for p in state.patches if p.status == "applied"],
+                exit_code=exit_code,
+                started_at=time.ctime(),
+                ended_at=time.ctime(),
+                duration_s=getattr(res, "duration_s", 0.0),
+                timed_out=getattr(res, "timed_out", False),
+                oom=getattr(res, "oom", False)
+            )
+            state.attempts.append(att)
+            state.phase = "OBSERVE"
+            return
+            
     state.phase = "RUN"
 
 def handle_run(state: ProjectState, deps: dict):
@@ -649,10 +654,42 @@ def handle_patch_apply(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
     patch = state.patches[-1]
     ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
+    sb = deps.get("sandbox", get_sandbox())
     
     success = apply_patch(state, patch, ws)
     if success:
         emit_event(state, "system", "patch_applied", f"Patch {patch.id} applied successfully")
+        
+        # Check if patch touched requirements*.txt or dependency files
+        touched_deps = False
+        if hasattr(patch, "edits") and patch.edits:
+            for ed in patch.edits:
+                filename = getattr(ed, "file", "")
+                if "requirements" in filename or filename.endswith((".txt", "setup.py", "pyproject.toml")):
+                    touched_deps = True
+                    break
+                    
+        if touched_deps:
+            emit_event(state, "system", "install_triggered", "Patch touched dependency files; running install")
+            install_exit, install_log, install_res = sb.install(state, ws, len(state.attempts) + 1)
+            if install_log:
+                deps["latest_log_path"] = install_log
+            if install_exit != 0:
+                emit_event(state, "system", "install_failed", f"Install failed with exit code {install_exit}")
+                att = Attempt(
+                    n=len(state.attempts) + 1,
+                    patches_applied=[p.id for p in state.patches if p.status == "applied"],
+                    exit_code=install_exit,
+                    started_at=time.ctime(),
+                    ended_at=time.ctime(),
+                    duration_s=getattr(install_res, "duration_s", 0.0),
+                    timed_out=getattr(install_res, "timed_out", False),
+                    oom=getattr(install_res, "oom", False)
+                )
+                state.attempts.append(att)
+                state.phase = "OBSERVE"
+                return
+
         state.phase = "RUN"
     else:
         patch.status = "reverted"

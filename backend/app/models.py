@@ -24,6 +24,9 @@ class ApprovalRequest(BaseModel):
 class HealthResponse(BaseModel):
     ok: bool
     docker: bool
+    image_present: bool = True
+    wheelhouse_ready: bool = True
+    sandbox_type: str = "docker"
     llm_primary: bool
     llm_fallback: bool
 
