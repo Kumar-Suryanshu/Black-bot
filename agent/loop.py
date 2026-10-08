@@ -216,7 +216,7 @@ def handle_plan(state: ProjectState, deps: dict):
             if c.id in plan_out.claim_result_keys:
                 c.result_key = plan_out.claim_result_keys[c.id]
             elif not c.result_key:
-                c.result_key = "test_accuracy_mean"
+                c.result_key = "test_accuracy_mean" if state.benchmark_id else c.metric
     except Exception as e:
         emit_event(state, "solver", "error", f"Planning failed: {str(e)}")
         state.plan = Plan(
@@ -311,7 +311,8 @@ def handle_setup(state: ProjectState, deps: dict):
                 ended_at=time.ctime(),
                 duration_s=getattr(res, "duration_s", 0.0),
                 timed_out=getattr(res, "timed_out", False),
-                oom=getattr(res, "oom", False)
+                oom=getattr(res, "oom", False),
+                log_path=log_path
             )
             state.attempts.append(att)
             state.phase = "OBSERVE"
@@ -357,7 +358,8 @@ def handle_run(state: ProjectState, deps: dict):
         ended_at=time.ctime(),
         duration_s=duration,
         timed_out=timed_out,
-        oom=oom
+        oom=oom,
+        log_path=log_path
     )
     state.attempts.append(att)
     state.phase = "OBSERVE"
@@ -386,42 +388,76 @@ def handle_observe(state: ProjectState, deps: dict):
         latest.error_class = err_info["error_class"]
         state.phase = "DIAGNOSE"
     else:
-        res_file = Path(ws) / "outputs" / "results.json"
-        if not res_file.exists():
-            state.phase = "DIAGNOSE"
-        else:
-            state.phase = "VALIDATE"
+        state.phase = "VALIDATE"
 
 def handle_validate(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
     ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
-    res_file = Path(ws) / "outputs" / "results.json"
-    data = load_results(str(res_file))
-    
-    claim = state.claims[0] if state.claims else None
-    val_res = validate_results(data, state.plan, claim)
-    
     latest = state.attempts[-1]
-    if val_res["valid"]:
-        latest.metrics = {"test_accuracy_mean": val_res["mean"], "test_accuracy_std": val_res.get("std", 0.0)}
+
+    from tools.metrics import extract_metric, record_metric_evidence
+
+    metrics_dict = {}
+    any_failed = False
+    failure_reason = None
+
+    effective_log_path = latest.log_path or deps.get("latest_log_path") or getattr(state, "latest_log_path", None)
+
+    for c in state.claims:
+        ext_res = extract_metric(ws, c, log_path=effective_log_path, plan=state.plan)
+        if ext_res.success and ext_res.value is not None:
+            metrics_dict[c.id] = ext_res.value
+            metrics_dict[c.metric] = ext_res.value
+
+            # Benchmark compatibility shim
+            if state.benchmark_id or c.metric == "test_accuracy":
+                metrics_dict["test_accuracy_mean"] = ext_res.value
+                if ext_res.std is not None:
+                    metrics_dict["test_accuracy_std"] = ext_res.std
+            if ext_res.std is not None:
+                metrics_dict[f"{c.metric}_std"] = ext_res.std
+            if ext_res.per_seed:
+                metrics_dict[f"{c.metric}_per_seed"] = ext_res.per_seed
+
+            # Record extraction evidence
+            tool_call_id = f"extract_{c.id}_run{latest.n}"
+            ev_id = record_metric_evidence(state, ext_res, tool_call_id)
+            if ev_id and ev_id not in latest.evidence:
+                latest.evidence.append(ev_id)
+        else:
+            any_failed = True
+            failure_reason = ext_res.error
+            break
+
+    if not any_failed and metrics_dict:
+        latest.metrics = metrics_dict
         state.phase = "COMPARE"
     else:
-        latest.error_class = "numerical_invalid"
+        latest.error_class = "metric_extraction_failed"
+        emit_event(state, "system", "metric_extraction_failed", failure_reason or "Metric extraction failed")
+        deps["extraction_error"] = failure_reason
         state.phase = "DIAGNOSE"
 
 def handle_compare(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
     latest = state.attempts[-1]
-    obs_mean = latest.metrics.get("test_accuracy_mean") if latest.metrics else None
-    
+
     comparisons = []
     all_within = True
     for c in state.claims:
-        res = compare(c, obs_mean)
+        obs_val = None
+        if latest.metrics:
+            obs_val = latest.metrics.get(c.id)
+            if obs_val is None:
+                obs_val = latest.metrics.get(c.metric)
+            if obs_val is None and "test_accuracy_mean" in latest.metrics:
+                obs_val = latest.metrics["test_accuracy_mean"]
+
+        res = compare(c, obs_val)
         comparisons.append(res)
         if not res.get("within_tolerance"):
             all_within = False
-            
+
     latest.comparison = comparisons
     if all_within:
         state.phase = "STATUS"
@@ -748,7 +784,8 @@ def handle_patch_apply(state: ProjectState, deps: dict):
                     ended_at=time.ctime(),
                     duration_s=getattr(install_res, "duration_s", 0.0),
                     timed_out=getattr(install_res, "timed_out", False),
-                    oom=getattr(install_res, "oom", False)
+                    oom=getattr(install_res, "oom", False),
+                    log_path=install_log
                 )
                 state.attempts.append(att)
                 state.phase = "OBSERVE"

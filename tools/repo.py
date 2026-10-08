@@ -49,14 +49,17 @@ def inspect_repository(workspace: str) -> Dict[str, Any]:
                     for m in net_matches:
                         network_hints.append({"file": rel, "text": m.group(0)})
 
-    # README commands
-    readme_path = ws / "README.md"
-    if readme_path.exists():
-        readme_text = readme_path.read_text(encoding="utf-8", errors="ignore")
-        for line in readme_text.splitlines():
-            sline = line.strip()
-            if sline.startswith("python ") or sline.startswith("python3 "):
-                readme_commands.append(sline)
+    # README commands (D7)
+    from tools.commands import extract_readme_commands
+    for readme_candidate in [ws / "README.md", ws / "readme.md", ws / "README.rst", ws / "README.txt", ws / "Readme.md"]:
+        if readme_candidate.exists():
+            try:
+                readme_text = readme_candidate.read_text(encoding="utf-8", errors="ignore")
+                for cmd in extract_readme_commands(readme_text):
+                    if cmd not in readme_commands:
+                        readme_commands.append(cmd)
+            except Exception:
+                pass
 
     # Refined GPU hints (Fix D5):
     # Only hard unguarded CUDA calls and CUDA-only packages are blockers.

@@ -258,7 +258,16 @@ def generate_report(
 
         # Build chart data points for frontend recharts
         for att in state.attempts:
-            obs = att.metrics.get("test_accuracy_mean") if att.metrics else None
+            obs = None
+            if att.metrics:
+                if primary_claim and primary_claim.id in att.metrics:
+                    obs = att.metrics[primary_claim.id]
+                elif primary_claim and primary_claim.metric in att.metrics:
+                    obs = att.metrics[primary_claim.metric]
+                elif "test_accuracy_mean" in att.metrics:
+                    obs = att.metrics["test_accuracy_mean"]
+                elif len(att.metrics) > 0:
+                    obs = next(iter(att.metrics.values()))
             runs_summary["comparison_chart"].append({
                 "attempt": f"Run {att.n}",
                 "run_n": att.n,

@@ -14,6 +14,7 @@ class ClaimsConfirmRequest(BaseModel):
     claims: List[Claim]
     command: Optional[str] = None
     allow_high_risk: bool = False
+    run_timeout_s: Optional[int] = None
 
 class ApprovalRequest(BaseModel):
     decision: Literal["approve", "reject", "edit"]

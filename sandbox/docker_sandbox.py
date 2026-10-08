@@ -16,6 +16,7 @@ class DockerSandbox:
         python_image = "rerun-base:py311"
         if getattr(state, "provisioning_plan", None) and isinstance(state.provisioning_plan, dict):
             python_image = state.provisioning_plan.get("python_image", "rerun-base:py311")
+        run_timeout = getattr(state, "run_timeout_s", None)
         return run_container(
             project_id=state.project_id,
             workspace=ws,
@@ -23,7 +24,8 @@ class DockerSandbox:
             command=command,
             kind=kind,
             n=n,
-            python_image=python_image
+            python_image=python_image,
+            run_timeout_override=run_timeout
         )
 
     def install(self, state: ProjectState, workspace: str, n: int = 1) -> Tuple[Optional[int], str, RunResult]:
