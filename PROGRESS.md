@@ -44,7 +44,23 @@
     - **Gate Tests:** 12 unit tests in `tests/unit/test_stage3_triage.py` covering all fixture mini-repos, safety sentinel (proves zero code executed/imported), and API endpoint.
     - **Real Repos Evaluation:** `docs/triage_samples.md` records complete triage reports for 5 real repos (`karpathy/micrograd`, `karpathy/minGPT`, `lucidrains/denoising-diffusion-pytorch`, `fastai/numerical-linear-algebra`, `eriklindernoren/PyTorch-GAN`) with human evaluation notes.
     - Full test suite passes 118 tests.
-  - *Status:* PASS — waiting for user confirmation before Stage 4.
+  - *Status:* PASS
+
+- [x] **Stage 4 (Completion Plan)**: Ops essentials (reliability)
+  - *Branch:* `completion/stage-4`
+  - *Gate Run Results:* PASS:
+    - **Per-Project Worker Lock & Registry (D15):** Thread-safe worker registry `_RUNNING_WORKERS` with `_RUNNING_WORKERS_LOCK` prevents duplicate worker threads on concurrent start requests (`test_double_start_worker_prevention`).
+    - **Optimistic Concurrency Locking (D15):** Added `version INTEGER DEFAULT 1` to `projects` table with automatic DB migration; `ConcurrentModificationError` raised on stale state updates (`test_optimistic_locking_version`).
+    - **Per-Step Persistence & Resumption (D16):** `run_project` persists project state to SQLite after every loop step; stores runtime dependencies (`workspace`, `latest_log_path`, `silent_divergence`, `active_container_name`); verifies clean resumption mid-run without lost state (`test_per_step_persistence_and_resumption`).
+    - **Abort Kills Worker & Active Container (D17):** POST `/api/projects/{id}/abort` halts running worker thread, sets `abort_requested=True`, marks state `DONE` with `status: INCONCLUSIVE`, and terminates/removes active and labeled Docker containers; verified with live Docker container execution and `docker ps` query (`test_stage4_docker_abort.py`, `test_abort_stops_worker_and_container`).
+    - **Evidence Ledger Persistence (D12):** `record_evidence` appends to `data/runs/<id>/evidence.json` and writes to SQLite `evidence` table; exposed via `GET /api/projects/{id}/evidence` and `GET /api/projects/{id}/evidence/{eid}` (`test_evidence_persistence_and_retrieval`).
+    - **Log Routes Contract Alignment (D13):** Aligned `/api/projects/{id}/runs/{n}/log` and frontend route `/api/projects/{id}/logs/{n}` returning `{"log": ...}` (`test_aligned_log_routes_contract`).
+    - **Approval Edit Decision & Policy Re-evaluation (D14):** POST `/api/approvals/{id}` with `decision="edit"` applies edited changes in-memory, re-runs policy check and Critic review; rejects invalid or policy-violating edits with HTTP 400 and reason; applies valid edits and creates approval record (`test_approval_edit_policy_violation_rejected`, `test_approval_edit_valid_applied`).
+    - **UX Polish:** Live elapsed session timer with status indicator in `Terminal.tsx`; `Last-Event-ID` persistence via `sessionStorage` in `useEventStream.ts` for reconnect stream replay; interactive JSON Edit Patch modal in `ApprovalModal.tsx`.
+    - **FastAPI Lifespan (D25):** Migrated deprecated `@app.on_event("startup")` to `@asynccontextmanager` `lifespan` handler.
+    - **Gate Tests:** 8/8 unit tests in `tests/unit/test_stage4_ops.py` passed; 1/1 integration test in `tests/integration/test_stage4_docker_abort.py` passed; full suite passes 127 tests; 3/3 security tests pass with Docker.
+    - **Frontend Build:** `npm run build` succeeds cleanly in 1.02s with 0 errors.
+  - *Status:* PASS — ready for user approval before Tier-1 Checkpoint / Stage 5.
 
 ---
 

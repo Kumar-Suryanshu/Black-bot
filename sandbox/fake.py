@@ -20,6 +20,10 @@ class FakeSandbox:
     def register(self, case_id: str, run_n: int, exit_code: int, logs: str, outputs: dict):
         self.canned_runs[(case_id, run_n)] = (exit_code, logs, outputs)
 
+    def kill(self, project_id: str):
+        """Mock kill method."""
+        pass
+
     def execute(self, state, workspace: str, command: str, kind: str, n: int) -> RunResult:
         case_id = getattr(state, "benchmark_id", "default")
         if (case_id, n) in self.canned_runs:

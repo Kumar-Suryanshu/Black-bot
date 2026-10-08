@@ -19,6 +19,15 @@ export function useEventStream({ projectId, onEvent, onError }: UseEventStreamOp
       return;
     }
 
+    // Restore last seen event id from sessionStorage for seamless reload resume
+    const storedLastId = sessionStorage.getItem(`rerun_last_event_${projectId}`);
+    if (storedLastId) {
+      const parsed = parseInt(storedLastId, 10);
+      if (!isNaN(parsed) && parsed > 0) {
+        lastEventIdRef.current = Math.max(lastEventIdRef.current, parsed);
+      }
+    }
+
     setConnectionStatus('reconnecting');
     let reconnectTimeout: any = null;
 
@@ -27,8 +36,9 @@ export function useEventStream({ projectId, onEvent, onError }: UseEventStreamOp
         esRef.current.close();
       }
 
-      // EventSource url with last_id query fallback or header
-      const url = `/api/projects/${projectId}/events`;
+      // Resume from Last-Event-ID across page refreshes and disconnects
+      const resumeId = lastEventIdRef.current;
+      const url = `/api/projects/${projectId}/events?last_event_id=${resumeId}`;
       const es = new EventSource(url);
       esRef.current = es;
 
@@ -41,6 +51,7 @@ export function useEventStream({ projectId, onEvent, onError }: UseEventStreamOp
           const data: Event = JSON.parse(msgEvent.data);
           if (data && data.id) {
             lastEventIdRef.current = Math.max(lastEventIdRef.current, data.id);
+            sessionStorage.setItem(`rerun_last_event_${projectId}`, String(lastEventIdRef.current));
             setEvents((prev) => {
               if (prev.some((e) => e.id === data.id)) return prev;
               return [...prev, data];

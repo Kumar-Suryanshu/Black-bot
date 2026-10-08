@@ -130,6 +130,14 @@ export const Dashboard: React.FC = () => {
     }
   };
 
+  // Handle human patch edit (D14)
+  const handleEditPatch = async (edits: any[], comment?: string) => {
+    if (!currentApprovalId) return;
+    await submitApproval(currentApprovalId, 'edit', false, comment, edits);
+    setIsApprovalOpen(false);
+    await loadState();
+  };
+
   if (loading && !state) {
     return (
       <div className="min-h-screen bg-[#EDE7DB] text-[#1F2A44] flex flex-col items-center justify-center font-mono">
@@ -234,6 +242,7 @@ export const Dashboard: React.FC = () => {
           requiresExtraConfirm={requiresExtraConfirm}
           onApprove={handleApprovePatch}
           onReject={handleRejectPatch}
+          onEdit={handleEditPatch}
           onSelectEvidence={(eid) => setSelectedEvidenceId(eid)}
         />
       )}

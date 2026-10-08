@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AlertTriangle, Check, X, FileEdit } from 'lucide-react';
+import { AlertTriangle, Check, X, FileEdit, Edit3 } from 'lucide-react';
 import type { Patch, CriticReview } from '../../api/types';
 import { CriticPanel } from './CriticPanel';
 import { EvidenceChip } from '../ui/EvidenceChip';
@@ -13,6 +13,7 @@ interface ApprovalModalProps {
   requiresExtraConfirm?: boolean;
   onApprove: (comment?: string, confirmExtra?: boolean) => void;
   onReject: (comment?: string) => void;
+  onEdit?: (edits: any[], comment?: string) => Promise<void>;
   onSelectEvidence?: (id: string) => void;
 }
 
@@ -25,11 +26,17 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
   requiresExtraConfirm = false,
   onApprove,
   onReject,
+  onEdit,
   onSelectEvidence,
 }) => {
   const [comment, setComment] = useState('');
   const [extraConfirmed, setExtraConfirmed] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Edit patch mode
+  const [isEditing, setIsEditing] = useState(false);
+  const [editsText, setEditsText] = useState(JSON.stringify(patch.edits || [], null, 2));
+  const [editError, setEditError] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
@@ -57,6 +64,30 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
     }
   };
 
+  const handleApplyEdit = async () => {
+    if (!onEdit || isSubmitting) return;
+    setEditError(null);
+    let parsed: any;
+    try {
+      parsed = JSON.parse(editsText);
+      if (!Array.isArray(parsed)) {
+        throw new Error('Edits must be an array of edit operations');
+      }
+    } catch (e: any) {
+      setEditError(`Invalid JSON: ${e.message}`);
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      await onEdit(parsed, comment);
+    } catch (e: any) {
+      setEditError(e.message || 'Edit rejected by policy check');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4 overflow-y-auto animate-fade-in">
       <div
@@ -79,9 +110,25 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
             </div>
           </div>
 
-          <span className="px-2.5 py-1 rounded bg-[#E5DFD3] text-[#1F2A44] border border-[#CDC5B4] text-[10px] font-bold uppercase tracking-wider">
-            {patch.risk_class}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="px-2.5 py-1 rounded bg-[#E5DFD3] text-[#1F2A44] border border-[#CDC5B4] text-[10px] font-bold uppercase tracking-wider">
+              {patch.risk_class}
+            </span>
+            {onEdit && (
+              <button
+                type="button"
+                onClick={() => setIsEditing(!isEditing)}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded border text-[10px] font-bold uppercase tracking-wider transition-colors ${
+                  isEditing
+                    ? 'bg-amber-100 text-amber-900 border-amber-400'
+                    : 'bg-[#FAF7F0] hover:bg-[#E5DFD3] text-[#4A5470] border-[#CDC5B4]'
+                }`}
+              >
+                <Edit3 className="w-3 h-3" />
+                <span>{isEditing ? 'Cancel Edit' : 'Edit Patch'}</span>
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Warning Banner (if any) */}
@@ -126,6 +173,31 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
           </div>
         )}
 
+        {/* Edit Patch Editor (if isEditing) */}
+        {isEditing && (
+          <div className="space-y-2 p-3.5 rounded-lg bg-amber-50/70 border border-amber-300">
+            <div className="flex items-center justify-between">
+              <span className="text-amber-900 font-bold uppercase tracking-wider text-[11px]">
+                Edit Patch Operations (JSON)
+              </span>
+              <span className="text-[10px] text-amber-800 font-normal">
+                Subject to strict Policy P1–P10 re-evaluation and Critic review.
+              </span>
+            </div>
+            <textarea
+              value={editsText}
+              onChange={(e) => setEditsText(e.target.value)}
+              rows={6}
+              className="w-full bg-[#FAF7F0] border border-amber-400 rounded p-2.5 font-mono text-xs text-[#1F2A44] focus:outline-none focus:border-rust"
+            />
+            {editError && (
+              <div className="p-2 rounded bg-red-100 border border-red-300 text-red-800 text-[11px]">
+                {editError}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Diff preview */}
         <div className="space-y-1.5">
           <span className="text-[#4A5470] text-xs font-semibold uppercase tracking-wider block">
@@ -150,7 +222,7 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
         <CriticPanel review={criticReview} />
 
         {/* Extra Confirmation Checkbox */}
-        {requiresExtraConfirm && (
+        {requiresExtraConfirm && !isEditing && (
           <label className="flex items-start gap-3 p-3 rounded-lg bg-amber-50 border border-amber-300 cursor-pointer select-none">
             <input
               type="checkbox"
@@ -188,15 +260,27 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
             <span>Reject Patch</span>
           </button>
 
-          <button
-            type="button"
-            onClick={handleApprove}
-            disabled={!canApprove || isSubmitting}
-            className="flex items-center gap-1.5 px-5 py-2.5 rounded-sm bg-rust hover:bg-[#A34B26] text-[#FAF7F0] font-bold text-xs uppercase tracking-wider border border-l-4 border-l-[#7A3317] shadow-md active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            <Check className="w-4 h-4 stroke-[3] text-[#FAF7F0]" />
-            <span>{isSubmitting ? 'Approving...' : 'Approve & Apply'}</span>
-          </button>
+          {isEditing ? (
+            <button
+              type="button"
+              onClick={handleApplyEdit}
+              disabled={isSubmitting}
+              className="flex items-center gap-1.5 px-5 py-2.5 rounded-sm bg-amber-700 hover:bg-amber-800 text-[#FAF7F0] font-bold text-xs uppercase tracking-wider border border-l-4 border-l-amber-950 shadow-md active:scale-95 transition-all disabled:opacity-40"
+            >
+              <Check className="w-4 h-4 stroke-[3] text-[#FAF7F0]" />
+              <span>{isSubmitting ? 'Evaluating Policy...' : 'Validate & Apply Edit'}</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleApprove}
+              disabled={!canApprove || isSubmitting}
+              className="flex items-center gap-1.5 px-5 py-2.5 rounded-sm bg-rust hover:bg-[#A34B26] text-[#FAF7F0] font-bold text-xs uppercase tracking-wider border border-l-4 border-l-[#7A3317] shadow-md active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <Check className="w-4 h-4 stroke-[3] text-[#FAF7F0]" />
+              <span>{isSubmitting ? 'Approving...' : 'Approve & Apply'}</span>
+            </button>
+          )}
         </div>
       </div>
     </div>

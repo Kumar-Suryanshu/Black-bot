@@ -11,6 +11,8 @@ def load_results(path):
 def validate_results(results, plan, claim):
     if not results:
         return {"valid": False, "errors": ["Results not found or invalid JSON"]}
+    if not claim or not getattr(claim, "result_key", None):
+        return {"valid": False, "errors": ["Missing claim or result_key"]}
         
     errors = []
     if claim.result_key not in results:

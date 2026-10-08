@@ -151,6 +151,12 @@ class ProjectState(BaseModel):
     unresolved_issues: list[str] = Field(default_factory=list)
     config_diff: list[dict] = Field(default_factory=list)
     evidence_ids: list[str] = Field(default_factory=list)
+    version: int = 1
+    workspace: str | None = None
+    latest_log_path: str | None = None
+    silent_divergence: bool = False
+    active_container_name: str | None = None
+    abort_requested: bool = False
     pending: dict | None = None
     final: dict | None = None
 

@@ -43,6 +43,21 @@ export const Terminal: React.FC<TerminalProps> = ({
     }
   }, [logContent, autoScroll]);
 
+  // Live elapsed timer (Ops UX)
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setElapsedSeconds((prev) => prev + 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const formatElapsed = (sec: number) => {
+    const mins = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${mins.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
   const handleDownloadLog = () => {
     const blob = new Blob([logContent], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
@@ -63,6 +78,10 @@ export const Terminal: React.FC<TerminalProps> = ({
           <TerminalIcon className="w-4 h-4 text-teal-400" />
           <span className="font-semibold text-[#F1ECE0] uppercase tracking-wider text-[11px]">
             Sandbox Container Console
+          </span>
+          <span className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-[#1E293B] border border-[#334155] text-amber-300 font-mono text-[11px]" title="Live session elapsed time">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse inline-block" />
+            <span>⏱️ {formatElapsed(elapsedSeconds)}</span>
           </span>
           <select
             value={selectedRun}

@@ -91,7 +91,7 @@ def apply_patch(state: ProjectState, patch: PatchProposal, workspace: str, run_s
     """
     # Invariant I8 check
     matching_approval = next(
-        (a for a in state.approvals if a.patch_id == patch.id and a.decision == "approve"),
+        (a for a in state.approvals if a.patch_id == patch.id and a.decision in ("approve", "edit")),
         None
     )
     if not matching_approval:

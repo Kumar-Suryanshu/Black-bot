@@ -130,16 +130,21 @@ export async function fetchPendingApproval(projectId: string): Promise<{
 
 export async function submitApproval(
   approvalId: string,
-  decision: 'approve' | 'reject',
+  decision: 'approve' | 'reject' | 'edit',
   confirmExtra: boolean = false,
-  comment: string = ''
-): Promise<void> {
+  comment: string = '',
+  edits?: any[]
+): Promise<any> {
   const res = await fetch(`${BASE_URL}/api/approvals/${approvalId}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ decision, confirm_extra: confirmExtra, comment }),
+    body: JSON.stringify({ decision, confirm_extra: confirmExtra, comment, edits }),
   });
-  if (!res.ok) throw new Error(`Failed to submit approval: ${res.statusText}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `Failed to submit approval: ${res.statusText}`);
+  }
+  return res.json();
 }
 
 export async function fetchEvidence(projectId: string, evidenceId: string): Promise<EvidenceItem> {
