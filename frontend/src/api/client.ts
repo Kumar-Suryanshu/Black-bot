@@ -29,7 +29,35 @@ export async function createProject(benchmarkId: string, allowHighRisk: boolean 
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ benchmark_id: benchmarkId, allow_high_risk: allowHighRisk }),
   });
-  if (!res.ok) throw new Error(`Failed to create project: ${res.statusText}`);
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    throw new Error(data?.detail || `Failed to create project: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function createCustomProject(
+  repoUrl: string,
+  paperFile: File,
+  repoRef?: string,
+  allowHighRisk: boolean = false
+): Promise<{ project_id: string }> {
+  const formData = new FormData();
+  formData.append('repo_url', repoUrl);
+  formData.append('paper', paperFile);
+  if (repoRef) {
+    formData.append('repo_ref', repoRef);
+  }
+  formData.append('allow_high_risk', String(allowHighRisk));
+
+  const res = await fetch(`${BASE_URL}/api/projects`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    throw new Error(data?.detail || `Failed to create project: ${res.statusText}`);
+  }
   return res.json();
 }
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowRight,
@@ -7,12 +7,19 @@ import {
   Check,
   Send,
   RotateCcw,
+  UploadCloud,
+  FileText,
+  GitBranch,
+  Code,
+  AlertTriangle,
+  Layers,
 } from 'lucide-react';
 import { NavbarApp } from '../components/layout/NavbarApp';
 import { Footer } from '../components/layout/Footer';
 import {
   fetchBenchmarks,
   createProject,
+  createCustomProject,
   startProject,
   fetchClaimsDraft,
   confirmClaims,
@@ -21,10 +28,16 @@ import {
 } from '../api/client';
 import type { BenchmarkCase, Claim } from '../api/types';
 
+const GITHUB_REPO_REGEX = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+(\.git)?$/;
+const MAX_PDF_SIZE_BYTES = 25 * 1024 * 1024; // 25 MB
+
 export const NewProject: React.FC = () => {
   const navigate = useNavigate();
 
-  // Step: 1 = choose case, 2 = confirm claim
+  // Mode: benchmark vs custom
+  const [sourceMode, setSourceMode] = useState<'benchmark' | 'custom'>('benchmark');
+
+  // Step: 1 = choose/upload, 2 = confirm claims
   const [step, setStep] = useState<1 | 2>(1);
 
   // Benchmarks list & selection
@@ -32,6 +45,21 @@ export const NewProject: React.FC = () => {
   const [selectedCaseId, setSelectedCaseId] = useState<string>('b4_combined');
   const [allowHighRisk, setAllowHighRisk] = useState<boolean>(false);
   const [loadingCases, setLoadingCases] = useState<boolean>(true);
+
+  // Custom Repo & PDF state
+  const [repoUrl, setRepoUrl] = useState<string>('');
+  const [repoRef, setRepoRef] = useState<string>('');
+  const [paperFile, setPaperFile] = useState<File | null>(null);
+  const [dragActive, setDragActive] = useState<boolean>(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Validation & Error states
+  const [urlError, setUrlError] = useState<string | null>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+  const [generalError, setGeneralError] = useState<string | null>(null);
+
+  // Progress state during custom ingest
+  const [progressState, setProgressState] = useState<string>('');
 
   // Active Project & Claim draft state
   const [projectId, setProjectId] = useState<string | null>(null);
@@ -48,7 +76,6 @@ export const NewProject: React.FC = () => {
       .then((data) => {
         setCases(data);
         if (data.length > 0) {
-          // Default to b4_combined if available
           const b4 = data.find((c) => c.id === 'b4_combined');
           setSelectedCaseId(b4 ? b4.id : data[0].id);
         }
@@ -57,58 +84,202 @@ export const NewProject: React.FC = () => {
       .finally(() => setLoadingCases(false));
   }, []);
 
-  // Step 1 -> 2: Start project & poll for CLAIMS_CONFIRM phase
+  // Client-side URL validation
+  const validateUrl = (url: string): boolean => {
+    const trimmed = url.trim();
+    if (!trimmed) {
+      setUrlError('GitHub repository URL is required.');
+      return false;
+    }
+    if (trimmed.startsWith('file://')) {
+      setUrlError('file:// URLs are strictly prohibited.');
+      return false;
+    }
+    if (trimmed.startsWith('git@') || trimmed.startsWith('ssh://')) {
+      setUrlError('SSH URLs are not supported. Use HTTPS.');
+      return false;
+    }
+    if (trimmed.includes('@')) {
+      setUrlError('Repository URL must not contain credentials or tokens.');
+      return false;
+    }
+    if (!trimmed.startsWith('https://')) {
+      setUrlError('Repository URL must start with https://');
+      return false;
+    }
+    if (!GITHUB_REPO_REGEX.test(trimmed)) {
+      setUrlError('Invalid repository URL. Must be a public GitHub URL (https://github.com/owner/repo)');
+      return false;
+    }
+    setUrlError(null);
+    return true;
+  };
+
+  // Client-side PDF file validation
+  const validatePdf = (file: File | null): boolean => {
+    if (!file) {
+      setPdfError('A research paper PDF file is required.');
+      return false;
+    }
+    if (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf') {
+      setPdfError('File must be a PDF document (.pdf).');
+      return false;
+    }
+    if (file.size > MAX_PDF_SIZE_BYTES) {
+      setPdfError(`PDF size (${(file.size / (1024 * 1024)).toFixed(1)} MB) exceeds 25 MB limit.`);
+      return false;
+    }
+    setPdfError(null);
+    return true;
+  };
+
+  const handleFileDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragActive(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      const file = e.dataTransfer.files[0];
+      if (validatePdf(file)) {
+        setPaperFile(file);
+      }
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      if (validatePdf(file)) {
+        setPaperFile(file);
+      }
+    }
+  };
+
+  // Start project flow (Benchmark or Custom)
   const handleStartProject = async () => {
-    if (!selectedCaseId) return;
-    setLoadingClaims(true);
-    setStep(2);
+    setGeneralError(null);
 
-    try {
-      // 1. Create project
-      const { project_id } = await createProject(selectedCaseId, allowHighRisk);
-      setProjectId(project_id);
+    let newProjId = '';
 
-      // 2. Start worker
-      await startProject(project_id);
+    if (sourceMode === 'custom') {
+      const urlValid = validateUrl(repoUrl);
+      const pdfValid = validatePdf(paperFile);
+      if (!urlValid || !pdfValid || !paperFile) {
+        return;
+      }
 
-      // 3. Poll until CLAIMS_CONFIRM phase reached
-      for (let i = 0; i < 30; i++) {
-        await new Promise((r) => setTimeout(r, 600));
-        const state = await fetchProjectState(project_id);
-        if (state.phase === 'CLAIMS_CONFIRM') {
-          break;
+      setLoadingClaims(true);
+      setStep(2);
+      setProgressState('Cloning repository into isolated workspace...');
+
+      try {
+        // 1. Create custom project
+        const res = await createCustomProject(
+          repoUrl.trim(),
+          paperFile,
+          repoRef.trim() || undefined,
+          allowHighRisk
+        );
+        newProjId = res.project_id;
+        setProjectId(newProjId);
+
+        // 2. Start worker
+        setProgressState('Extracting paper text & citations...');
+        await startProject(newProjId);
+
+        // 3. Poll until CLAIMS_CONFIRM phase reached
+        setProgressState('Inspecting repository profile & extracting claims...');
+        for (let i = 0; i < 45; i++) {
+          await new Promise((r) => setTimeout(r, 800));
+          const state = await fetchProjectState(newProjId);
+          if (state.phase === 'CLAIMS_CONFIRM') {
+            break;
+          }
         }
-      }
 
-      // 4. Fetch extracted claims draft
-      const draft = await fetchClaimsDraft(project_id);
-      if (draft.claims && draft.claims.length > 0) {
-        setClaims(draft.claims);
-      } else {
-        // Fallback default claim row per Section 10 spec
-        setClaims([
-          {
-            id: 'C-1',
-            statement: 'We achieved a test accuracy of 0.956 ± 0.002 (mean ± std over 5 seeds).',
-            metric: 'test_accuracy',
-            reported: 0.956,
-            tolerance: { type: 'abs', value: 0.01 },
-            result_key: 'test_accuracy_mean',
-            source_ref: 'p.1',
-            source_quote: 'test accuracy of 0.956',
-            primary: true,
-            confirmed_by_human: true,
-          },
-        ]);
+        // 4. Fetch claims draft
+        const draft = await fetchClaimsDraft(newProjId);
+        if (draft.claims && draft.claims.length > 0) {
+          setClaims(draft.claims);
+        } else {
+          setClaims([
+            {
+              id: 'C-1',
+              statement: 'Headline result reported in submitted research paper.',
+              metric: 'test_accuracy',
+              reported: 0.95,
+              tolerance: { type: 'abs', value: 0.01 },
+              result_key: 'test_accuracy_mean',
+              source_ref: 'Abstract / Results',
+              source_quote: 'Accuracy achieved by proposed method',
+              primary: true,
+              confirmed_by_human: true,
+            },
+          ]);
+        }
+        setPaperSettings(draft.paper_settings || []);
+        if (draft.command) {
+          setRunCommand(draft.command);
+        }
+      } catch (err: any) {
+        console.error('Failed to create custom reproduction', err);
+        setGeneralError(err.message || 'Failed to initialize reproduction project.');
+        setStep(1);
+      } finally {
+        setLoadingClaims(false);
+        setProgressState('');
       }
-      setPaperSettings(draft.paper_settings || []);
-      if (draft.command) {
-        setRunCommand(draft.command);
+    } else {
+      // Benchmark Mode
+      if (!selectedCaseId) return;
+      setLoadingClaims(true);
+      setStep(2);
+      setProgressState('Initializing benchmark workspace...');
+
+      try {
+        const { project_id } = await createProject(selectedCaseId, allowHighRisk);
+        newProjId = project_id;
+        setProjectId(newProjId);
+
+        await startProject(newProjId);
+
+        for (let i = 0; i < 30; i++) {
+          await new Promise((r) => setTimeout(r, 600));
+          const state = await fetchProjectState(newProjId);
+          if (state.phase === 'CLAIMS_CONFIRM') {
+            break;
+          }
+        }
+
+        const draft = await fetchClaimsDraft(newProjId);
+        if (draft.claims && draft.claims.length > 0) {
+          setClaims(draft.claims);
+        } else {
+          setClaims([
+            {
+              id: 'C-1',
+              statement: 'We achieved a test accuracy of 0.956 ± 0.002 (mean ± std over 5 seeds).',
+              metric: 'test_accuracy',
+              reported: 0.956,
+              tolerance: { type: 'abs', value: 0.01 },
+              result_key: 'test_accuracy_mean',
+              source_ref: 'p.1',
+              source_quote: 'test accuracy of 0.956',
+              primary: true,
+              confirmed_by_human: true,
+            },
+          ]);
+        }
+        setPaperSettings(draft.paper_settings || []);
+        if (draft.command) {
+          setRunCommand(draft.command);
+        }
+      } catch (err: any) {
+        console.error('Failed to start reproduction flow', err);
+        setGeneralError(err.message || 'Failed to start reproduction flow.');
+        setStep(1);
+      } finally {
+        setLoadingClaims(false);
+        setProgressState('');
       }
-    } catch (err) {
-      console.error('Failed to start reproduction flow', err);
-    } finally {
-      setLoadingClaims(false);
     }
   };
 
@@ -159,7 +330,7 @@ export const NewProject: React.FC = () => {
               NEW REPRODUCTION RUN
             </span>
             <h1 className="font-serif text-2xl sm:text-3xl font-normal uppercase tracking-wide text-[#1F2A44]">
-              {step === 1 ? '1. Select Benchmark Case' : '2. Confirm Extracted Claims'}
+              {step === 1 ? '1. Select Source & Artifacts' : '2. Confirm Extracted Claims'}
             </h1>
           </div>
 
@@ -171,7 +342,7 @@ export const NewProject: React.FC = () => {
                   : 'bg-[#D9D4C6] text-[#4A5470] border-[#CDC5B4]'
               }`}
             >
-              1. Case Selection
+              1. Source Selection
             </span>
             <span className="text-[#CDC5B4]">→</span>
             <span
@@ -186,70 +357,238 @@ export const NewProject: React.FC = () => {
           </div>
         </div>
 
-        {/* STEP 1: CHOOSE A BENCHMARK CASE */}
+        {/* Global Error Banner */}
+        {generalError && (
+          <div className="bg-red-50 border-l-4 border-fail p-4 rounded-r-lg border border-red-200 text-xs font-mono text-fail flex items-start gap-3 shadow-sm">
+            <AlertTriangle className="w-5 h-5 shrink-0 text-fail" />
+            <div className="space-y-1">
+              <span className="font-bold uppercase tracking-wider block">Reproduction Error</span>
+              <p className="font-sans leading-relaxed">{generalError}</p>
+            </div>
+          </div>
+        )}
+
+        {/* STEP 1: SOURCE SELECTION */}
         {step === 1 && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
-            {/* Left 2 Cols: Case Selection Cards */}
-            <div className="lg:col-span-2 space-y-4">
-              <span className="text-xs font-mono text-[#4A5470] uppercase tracking-[0.2em] font-bold block">
-                Choose a Synthetic Research Benchmark:
-              </span>
+            {/* Left 2 Cols: Mode Switch & Input Cards */}
+            <div className="lg:col-span-2 space-y-6">
+              {/* Mode Switch Tabs */}
+              <div className="flex rounded-lg border border-[#CDC5B4] bg-[#D9D4C6] p-1 font-mono text-xs">
+                <button
+                  type="button"
+                  onClick={() => setSourceMode('benchmark')}
+                  className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-md transition-all font-bold uppercase tracking-wider ${
+                    sourceMode === 'benchmark'
+                      ? 'bg-[#FAF7F0] text-rust shadow-sm border border-[#CDC5B4]'
+                      : 'text-[#4A5470] hover:text-[#1F2A44]'
+                  }`}
+                >
+                  <Layers className="w-4 h-4" />
+                  <span>Benchmark Cases</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSourceMode('custom')}
+                  className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-md transition-all font-bold uppercase tracking-wider ${
+                    sourceMode === 'custom'
+                      ? 'bg-[#FAF7F0] text-rust shadow-sm border border-[#CDC5B4]'
+                      : 'text-[#4A5470] hover:text-[#1F2A44]'
+                  }`}
+                >
+                  <Code className="w-4 h-4" />
+                  <span>My Paper + GitHub Repo</span>
+                </button>
+              </div>
 
-              {loadingCases ? (
-                <div className="space-y-3">
-                  {[1, 2, 3, 4, 5].map((i) => (
-                    <div key={i} className="h-24 bg-[#FAF7F0] border border-[#CDC5B4] rounded-xl animate-pulse" />
-                  ))}
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {cases.map((c) => {
-                    const isSelected = selectedCaseId === c.id;
-                    const isDemo = c.id === 'b4_combined';
+              {/* Mode A: Benchmark Selector */}
+              {sourceMode === 'benchmark' && (
+                <div className="space-y-4">
+                  <span className="text-xs font-mono text-[#4A5470] uppercase tracking-[0.2em] font-bold block">
+                    Choose a Synthetic Research Benchmark:
+                  </span>
 
-                    return (
-                      <div
-                        key={c.id}
-                        onClick={() => setSelectedCaseId(c.id)}
-                        className={`p-5 rounded-xl border cursor-pointer transition-all ${
-                          isSelected
-                            ? 'bg-[#FFFFFF] border-2 border-rust shadow-[0_4px_20px_rgba(184,87,47,0.2)] ring-1 ring-rust/50'
-                            : 'bg-[#FAF7F0] border-[#CDC5B4] hover:border-rust/40 hover:bg-[#FFFFFF]'
-                        }`}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="space-y-1">
-                            <div className="flex items-center gap-2.5">
-                              <span className="font-mono text-xs font-bold text-rust">
-                                {c.id}
-                              </span>
-                              <h3 className="font-serif text-lg font-normal uppercase text-[#1F2A44]">
-                                {c.title}
-                              </h3>
-                              {isDemo && (
-                                <span className="px-2 py-0.5 rounded-sm bg-rust text-[#FAF7F0] font-mono text-[10px] font-bold uppercase tracking-wider shadow-sm">
-                                  Recommended for Demo
-                                </span>
-                              )}
-                            </div>
-                            <p className="text-xs text-[#4A5470] font-sans leading-relaxed">
-                              {c.description}
-                            </p>
-                          </div>
+                  {loadingCases ? (
+                    <div className="space-y-3">
+                      {[1, 2, 3, 4, 5].map((i) => (
+                        <div key={i} className="h-24 bg-[#FAF7F0] border border-[#CDC5B4] rounded-xl animate-pulse" />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {cases.map((c) => {
+                        const isSelected = selectedCaseId === c.id;
+                        const isDemo = c.id === 'b4_combined';
 
+                        return (
                           <div
-                            className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 ${
+                            key={c.id}
+                            onClick={() => setSelectedCaseId(c.id)}
+                            className={`p-5 rounded-xl border cursor-pointer transition-all ${
                               isSelected
-                                ? 'border-rust bg-rust text-[#FAF7F0]'
-                                : 'border-[#CDC5B4] bg-[#FAF7F0]'
+                                ? 'bg-[#FFFFFF] border-2 border-rust shadow-[0_4px_20px_rgba(184,87,47,0.2)] ring-1 ring-rust/50'
+                                : 'bg-[#FAF7F0] border-[#CDC5B4] hover:border-rust/40 hover:bg-[#FFFFFF]'
                             }`}
                           >
-                            {isSelected && <CheckCircle2 className="w-4 h-4 fill-current stroke-[#FAF7F0]" />}
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2.5">
+                                  <span className="font-mono text-xs font-bold text-rust">
+                                    {c.id}
+                                  </span>
+                                  <h3 className="font-serif text-lg font-normal uppercase text-[#1F2A44]">
+                                    {c.title}
+                                  </h3>
+                                  {isDemo && (
+                                    <span className="px-2 py-0.5 rounded-sm bg-rust text-[#FAF7F0] font-mono text-[10px] font-bold uppercase tracking-wider shadow-sm">
+                                      Recommended for Demo
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-xs text-[#4A5470] font-sans leading-relaxed">
+                                  {c.description}
+                                </p>
+                              </div>
+
+                              <div
+                                className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 ${
+                                  isSelected
+                                    ? 'border-rust bg-rust text-[#FAF7F0]'
+                                    : 'border-[#CDC5B4] bg-[#FAF7F0]'
+                                }`}
+                              >
+                                {isSelected && <CheckCircle2 className="w-4 h-4 fill-current stroke-[#FAF7F0]" />}
+                              </div>
+                            </div>
                           </div>
-                        </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Mode B: Custom GitHub Repo + PDF Upload */}
+              {sourceMode === 'custom' && (
+                <div className="space-y-6">
+                  {/* Consent Notice Banner */}
+                  <div className="bg-[#FAF7F0] border-l-4 border-rust p-4 rounded-r-xl border border-[#CDC5B4] text-xs font-mono text-[#1F2A44] space-y-1.5 shadow-sm">
+                    <div className="flex items-center gap-2 text-rust font-bold uppercase tracking-wider text-[11px]">
+                      <AlertTriangle className="w-4 h-4" />
+                      <span>Security & LLM Provider Consent</span>
+                    </div>
+                    <p className="text-[#4A5470] font-sans leading-relaxed">
+                      This runs third-party code in a sandbox; Docker is not a perfect boundary. Your paper is sent to an LLM provider.
+                    </p>
+                  </div>
+
+                  <div className="bg-[#FAF7F0] border border-[#CDC5B4] rounded-xl p-6 space-y-5 shadow-sm">
+                    {/* GitHub Repo URL */}
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold uppercase tracking-wider text-[#1F2A44] flex items-center gap-2">
+                        <Code className="w-4 h-4 text-rust" />
+                        <span>GitHub Repository URL:</span>
+                      </label>
+                      <input
+                        type="url"
+                        value={repoUrl}
+                        onChange={(e) => {
+                          setRepoUrl(e.target.value);
+                          if (urlError) validateUrl(e.target.value);
+                        }}
+                        placeholder="https://github.com/owner/repository"
+                        className={`w-full bg-[#FFFFFF] text-[#1F2A44] font-mono text-xs rounded-lg px-4 py-3 border ${
+                          urlError ? 'border-fail ring-1 ring-fail' : 'border-[#CDC5B4] focus:border-rust'
+                        } focus:outline-none shadow-inner`}
+                      />
+                      {urlError ? (
+                        <p className="text-[11px] text-fail font-sans">{urlError}</p>
+                      ) : (
+                        <p className="text-[11px] text-[#4A5470] font-sans">
+                          Must be a public HTTPS GitHub repository without credentials.
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Git Ref / Branch (Optional) */}
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold uppercase tracking-wider text-[#1F2A44] flex items-center gap-2">
+                        <GitBranch className="w-4 h-4 text-rust" />
+                        <span>Git Branch / Commit Ref (Optional):</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={repoRef}
+                        onChange={(e) => setRepoRef(e.target.value)}
+                        placeholder="main (or commit SHA / tag)"
+                        className="w-full bg-[#FFFFFF] text-[#1F2A44] font-mono text-xs rounded-lg px-4 py-3 border border-[#CDC5B4] focus:outline-none focus:border-rust shadow-inner"
+                      />
+                      <p className="text-[11px] text-[#4A5470] font-sans">
+                        Defaults to default branch if left empty.
+                      </p>
+                    </div>
+
+                    {/* Paper PDF Dropzone */}
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold uppercase tracking-wider text-[#1F2A44] flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-rust" />
+                        <span>Research Paper PDF (Max 25 MB, ≤ 60 Pages):</span>
+                      </label>
+
+                      <div
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          setDragActive(true);
+                        }}
+                        onDragLeave={() => setDragActive(false)}
+                        onDrop={handleFileDrop}
+                        onClick={() => fileInputRef.current?.click()}
+                        className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all ${
+                          dragActive
+                            ? 'border-rust bg-rust/10'
+                            : paperFile
+                            ? 'border-ok/60 bg-emerald-50/50'
+                            : 'border-[#CDC5B4] bg-[#FFFFFF] hover:border-rust/60 hover:bg-[#FAF7F0]'
+                        }`}
+                      >
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          accept="application/pdf,.pdf"
+                          onChange={handleFileChange}
+                          className="hidden"
+                        />
+
+                        {paperFile ? (
+                          <div className="space-y-2">
+                            <div className="w-10 h-10 rounded-full bg-emerald-100 text-ok flex items-center justify-center mx-auto">
+                              <CheckCircle2 className="w-6 h-6 text-emerald-600" />
+                            </div>
+                            <div className="space-y-1">
+                              <p className="font-bold text-xs text-[#1F2A44]">{paperFile.name}</p>
+                              <p className="text-[11px] text-[#4A5470]">
+                                {(paperFile.size / (1024 * 1024)).toFixed(2)} MB · Click to replace file
+                              </p>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            <UploadCloud className="w-8 h-8 text-rust/70 mx-auto" />
+                            <div className="space-y-1">
+                              <p className="text-xs font-bold text-[#1F2A44]">
+                                Drop your research paper PDF here, or <span className="text-rust underline">browse</span>
+                              </p>
+                              <p className="text-[11px] text-[#4A5470]">
+                                Must contain extractable digital text (not a scanned image)
+                              </p>
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    );
-                  })}
+
+                      {pdfError && <p className="text-[11px] text-fail font-sans">{pdfError}</p>}
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -267,11 +606,15 @@ export const NewProject: React.FC = () => {
               <div className="space-y-3 text-[#4A5470] leading-relaxed">
                 <div className="flex items-start gap-2.5">
                   <span className="text-rust font-bold">1.</span>
-                  <span>Read paper PDF & extract headline accuracy claim</span>
+                  <span>
+                    {sourceMode === 'custom'
+                      ? 'Safely clone shallow repo & validate paper PDF'
+                      : 'Read paper PDF & extract headline accuracy claim'}
+                  </span>
                 </div>
                 <div className="flex items-start gap-2.5">
                   <span className="text-rust font-bold">2.</span>
-                  <span>Human operator confirms or edits claims on postcard</span>
+                  <span>Human operator confirms or edits claims & command</span>
                 </div>
                 <div className="flex items-start gap-2.5">
                   <span className="text-rust font-bold">3.</span>
@@ -300,7 +643,7 @@ export const NewProject: React.FC = () => {
               <button
                 type="button"
                 onClick={handleStartProject}
-                disabled={!selectedCaseId}
+                disabled={sourceMode === 'benchmark' ? !selectedCaseId : !repoUrl || !paperFile}
                 className="w-full flex items-center justify-center gap-2 py-3.5 bg-rust hover:bg-[#A34B26] text-[#FAF7F0] font-bold text-xs uppercase tracking-[0.2em] shadow-xl hover:-translate-y-0.5 active:scale-95 transition-all border border-l-4 border-l-[#7A3317] disabled:opacity-40"
                 style={{
                   clipPath: 'polygon(0% 3px, 2px 0%, calc(100% - 3px) 0%, 100% 2px, 99% calc(100% - 2px), calc(100% - 2px) 100%, 2px 99%, 0% calc(100% - 3px))',
@@ -316,11 +659,13 @@ export const NewProject: React.FC = () => {
         {/* STEP 2: CONFIRM THE CLAIM (Field Desk Postcard Motif Reference S2) */}
         {step === 2 && (
           <div className="space-y-6">
-            {/* Collapse banner of selected case */}
+            {/* Collapse banner of selected source */}
             <div className="flex items-center justify-between bg-[#FAF7F0] px-5 py-3 rounded-lg border border-[#CDC5B4] text-xs font-mono text-[#1F2A44] shadow-sm">
               <div className="flex items-center gap-2">
-                <span className="text-[#4A5470]">Selected Benchmark:</span>
-                <span className="text-rust font-bold uppercase">{selectedCaseId}</span>
+                <span className="text-[#4A5470]">Source:</span>
+                <span className="text-rust font-bold uppercase">
+                  {sourceMode === 'custom' ? `Custom: ${repoUrl}` : `Benchmark: ${selectedCaseId}`}
+                </span>
               </div>
               <button
                 type="button"
@@ -328,7 +673,7 @@ export const NewProject: React.FC = () => {
                 className="text-[#4A5470] hover:text-[#1F2A44] flex items-center gap-1.5 transition-colors border border-[#CDC5B4] px-2.5 py-1 rounded bg-[#E5DFD3]/40 hover:bg-[#E5DFD3]"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
-                <span>Change Case</span>
+                <span>Change Source</span>
               </button>
             </div>
 
@@ -336,7 +681,7 @@ export const NewProject: React.FC = () => {
               <div className="bg-paper text-ink rounded-xl p-12 border border-kraft shadow-2xl text-center space-y-4">
                 <div className="w-12 h-12 rounded-full border-4 border-rust border-t-transparent animate-spin mx-auto" />
                 <h3 className="font-serif text-xl uppercase tracking-wider text-ink font-normal">
-                  Reading the paper PDF & inspecting the repository...
+                  {progressState || 'Reading the paper PDF & inspecting the repository...'}
                 </h3>
                 <p className="text-xs text-ink-soft font-mono">
                   Extracting verbatim statements, reported metrics, tolerances, and parameter defaults.
@@ -466,7 +811,7 @@ export const NewProject: React.FC = () => {
                   <div className="space-y-2 font-mono text-xs">
                     <div className="flex items-center justify-between">
                       <span className="font-bold uppercase tracking-wider text-ink">
-                        3. Planned Run Command:
+                        3. Planned Run Command (Editable):
                       </span>
                       <button
                         type="button"

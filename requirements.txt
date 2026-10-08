@@ -8,3 +8,4 @@ pypdf
 httpx
 PyYAML
 python-dotenv
+python-multipart

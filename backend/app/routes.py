@@ -76,21 +76,141 @@ def get_benchmarks():
     return out
 
 @router.post("/api/projects", response_model=ProjectCreateResponse)
-def create_project(req: ProjectCreateRequest):
-    project_id = f"proj_{uuid.uuid4().hex[:8]}"
-    state = ProjectState(
-        project_id=project_id,
-        benchmark_id=req.benchmark_id,
-        repo_commit="unknown",
-        phase="INGEST",
-        budgets={"steps_used": 0, "patches_used": 0},
-        claims=[],
-        paper_settings=[],
-        allow_high_risk=req.allow_high_risk,
-        repo_profile={}
-    )
-    save_project_state("data/rerun.db", project_id, req.benchmark_id, "unknown", "INGEST", state)
-    return ProjectCreateResponse(project_id=project_id)
+async def create_project(request: Request):
+    content_type = request.headers.get("content-type", "")
+    import hashlib
+    import shutil
+    from pathlib import Path
+    
+    if "application/json" in content_type:
+        try:
+            req_data = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Malformed JSON payload")
+            
+        benchmark_id = req_data.get("benchmark_id")
+        if not benchmark_id:
+            raise HTTPException(status_code=400, detail="Missing benchmark_id in JSON payload")
+            
+        allow_high_risk = bool(req_data.get("allow_high_risk", False))
+        project_id = f"proj_{uuid.uuid4().hex[:8]}"
+        
+        paper_path = None
+        paper_sha256 = None
+        reg_path = "benchmarks/registry.json"
+        if os.path.exists(reg_path):
+            try:
+                with open(reg_path, "r", encoding="utf-8") as f:
+                    reg = json.load(f)
+                case_info = next((c for c in reg.get("cases", []) if c["id"] == benchmark_id), None)
+                if case_info and case_info.get("paper_path"):
+                    paper_path = case_info["paper_path"]
+                    if os.path.exists(paper_path):
+                        paper_sha256 = hashlib.sha256(Path(paper_path).read_bytes()).hexdigest()
+            except Exception:
+                pass
+
+        state = ProjectState(
+            project_id=project_id,
+            source="benchmark",
+            benchmark_id=benchmark_id,
+            repo_commit="unknown",
+            paper_path=paper_path,
+            paper_sha256=paper_sha256,
+            phase="INGEST",
+            budgets={"steps_used": 0, "patches_used": 0},
+            claims=[],
+            paper_settings=[],
+            allow_high_risk=allow_high_risk,
+            repo_profile={}
+        )
+        save_project_state("data/rerun.db", project_id, benchmark_id, "unknown", "INGEST", state)
+        return ProjectCreateResponse(project_id=project_id)
+        
+    elif "multipart/form-data" in content_type:
+        from agent.config import is_custom_repos_allowed
+        if not is_custom_repos_allowed():
+            raise HTTPException(
+                status_code=403,
+                detail="Custom repository execution is currently disabled on this server."
+            )
+            
+        from tools.ingest import ingest_custom_repo, validate_repo_url, RepoIngestError
+        from tools.paper import validate_pdf_bytes, PDFValidationError
+        
+        try:
+            form = await request.form()
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to parse multipart form data: {e}")
+            
+        repo_url = form.get("repo_url")
+        repo_ref = form.get("repo_ref")
+        if not repo_url or not isinstance(repo_url, str):
+            raise HTTPException(status_code=400, detail="Missing required field: repo_url")
+            
+        try:
+            validate_repo_url(repo_url)
+        except RepoIngestError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+            
+        paper_file = form.get("paper")
+        if not paper_file:
+            raise HTTPException(status_code=400, detail="Missing required file: paper (PDF)")
+            
+        try:
+            paper_bytes = await paper_file.read()
+            pdf_info = validate_pdf_bytes(paper_bytes)
+        except PDFValidationError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to read paper PDF: {e}")
+            
+        allow_high_risk = form.get("allow_high_risk") in ("true", "1", True)
+        project_id = f"proj_{uuid.uuid4().hex[:8]}"
+        
+        # Save paper
+        project_run_dir = Path("data/runs") / project_id
+        project_run_dir.mkdir(parents=True, exist_ok=True)
+        saved_paper_path = str(project_run_dir / "paper.pdf")
+        Path(saved_paper_path).write_bytes(paper_bytes)
+        
+        # Ingest custom repo into workspace
+        ws_path = str(project_run_dir / "workspace")
+        try:
+            ingest_res = ingest_custom_repo(
+                repo_url=repo_url,
+                repo_ref=repo_ref if isinstance(repo_ref, str) and repo_ref.strip() else None,
+                workspace_path=ws_path
+            )
+        except RepoIngestError as e:
+            shutil.rmtree(project_run_dir, ignore_errors=True)
+            raise HTTPException(status_code=400, detail=str(e))
+            
+        commit_sha = ingest_res.get("commit_sha", "unknown")
+        state = ProjectState(
+            project_id=project_id,
+            source="custom",
+            benchmark_id="custom",
+            repo_url=repo_url,
+            repo_ref=repo_ref if isinstance(repo_ref, str) else None,
+            repo_commit=commit_sha,
+            paper_path=saved_paper_path,
+            paper_sha256=pdf_info["sha256"],
+            phase="INGEST",
+            budgets={"steps_used": 0, "patches_used": 0},
+            claims=[],
+            paper_settings=[],
+            allow_high_risk=allow_high_risk,
+            repo_profile={}
+        )
+        save_project_state("data/rerun.db", project_id, "custom", commit_sha, "INGEST", state)
+        return ProjectCreateResponse(project_id=project_id)
+        
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Content-Type must be 'application/json' or 'multipart/form-data'"
+        )
 
 @router.post("/api/projects/{id}/start")
 def start_project(id: str):
@@ -109,7 +229,13 @@ def get_project(id: str):
         raise HTTPException(status_code=404, detail="Project not found")
     return {
         "project_id": state.project_id,
+        "source": state.source,
         "benchmark_id": state.benchmark_id,
+        "repo_url": state.repo_url,
+        "repo_ref": state.repo_ref,
+        "paper_path": state.paper_path,
+        "user_command": state.user_command,
+        "simulated": state.simulated,
         "phase": state.phase,
         "pending": state.pending,
         "budgets": state.budgets,
@@ -126,7 +252,7 @@ def get_claims_draft(id: str):
     return {
         "claims": [c.model_dump() for c in state.claims],
         "paper_settings": [ps.model_dump() for ps in state.paper_settings],
-        "command": state.plan.command if state.plan else None
+        "command": state.user_command or (state.plan.command if state.plan else None)
     }
 
 @router.post("/api/projects/{id}/claims/confirm")
@@ -141,8 +267,10 @@ def confirm_claims(id: str, req: ClaimsConfirmRequest):
 
     state.claims = req.claims
     state.allow_high_risk = req.allow_high_risk
-    if req.command and state.plan:
-        state.plan.command = req.command
+    if req.command:
+        state.user_command = req.command
+        if state.plan:
+            state.plan.command = req.command
     state.command_confirmed = True
     
     save_project_state("data/rerun.db", id, state.benchmark_id, state.repo_commit, state.phase, state)
