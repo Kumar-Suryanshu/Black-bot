@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   Copy,
   Check,
+  Package,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -101,6 +102,17 @@ export const Report: React.FC = () => {
       />
 
       <main className="flex-1 max-w-5xl w-full mx-auto p-4 sm:p-8 space-y-10">
+        {/* Simulated Run Banner (R7) */}
+        {report.simulated && (
+          <div className="bg-amber-900/10 border-2 border-amber-600/60 rounded-xl p-4 flex items-center gap-3 text-amber-900 font-mono text-xs">
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+            <div>
+              <span className="font-bold uppercase tracking-wider">Simulated Execution Banner:</span>{' '}
+              This reproduction was executed in simulation mode (synthetic execution harness / fake sandbox).
+            </div>
+          </div>
+        )}
+
         {/* Top Header Card */}
         <div className="bg-[#FAF7F0] border border-[#CDC5B4] rounded-2xl p-6 sm:p-8 shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
           <div className="space-y-3">
@@ -113,12 +125,31 @@ export const Report: React.FC = () => {
             </Link>
 
             <h1 className="font-serif text-2xl sm:text-3xl font-normal uppercase tracking-wide text-[#1F2A44]">
-              Reproduction Report: {report.benchmark_id}
+              Reproduction Report: {report.benchmark_id || 'Custom Paper'}
             </h1>
             <p className="text-xs text-[#4A5470] font-mono">
               Verification completed across {attempts.length} run{attempts.length > 1 ? 's' : ''} with{' '}
               {report.after_n_fixes} approved patch{report.after_n_fixes > 1 ? 'es' : ''}.
             </p>
+
+            {/* Target Repository & Paper Metadata (R7) */}
+            <div className="pt-2 text-[11px] text-[#4A5470] space-y-0.5 border-t border-[#CDC5B4]/60">
+              <div>
+                <span className="font-bold text-[#1F2A44]">Repo:</span>{' '}
+                <span className="font-mono">{report.repo_url || report.benchmark_id || 'Synthetic Benchmark'}</span>
+                {report.repo_commit && (
+                  <span className="ml-2 px-1.5 py-0.5 bg-[#EDE7DB] rounded text-[10px] text-[#1F2A44]">
+                    SHA: {report.repo_commit.slice(0, 8)}
+                  </span>
+                )}
+              </div>
+              {report.paper_path && (
+                <div>
+                  <span className="font-bold text-[#1F2A44]">Paper:</span>{' '}
+                  <span className="font-mono">{report.paper_path}</span>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Physical Verification Stamp */}
@@ -131,6 +162,14 @@ export const Report: React.FC = () => {
         <div className="flex items-center justify-between border-b border-[#CDC5B4] pb-4 text-xs font-mono">
           <span className="text-[#4A5470]">Document certified by deterministic tools</span>
           <div className="flex items-center gap-3">
+            <a
+              href={`/api/projects/${id}/kit`}
+              download={`rerun_kit_${id}.zip`}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm bg-[#FAF7F0] hover:bg-[#E5DFD3] text-[#1F2A44] border border-[#CDC5B4] transition-colors uppercase tracking-wider text-[11px] font-semibold"
+            >
+              <Package className="w-3.5 h-3.5 text-rust" />
+              <span>Reproduction Kit (.zip)</span>
+            </a>
             <button
               onClick={handleCopyMarkdown}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm bg-[#FAF7F0] hover:bg-[#E5DFD3] text-[#1F2A44] border border-[#CDC5B4] transition-colors uppercase tracking-wider text-[11px] font-semibold"

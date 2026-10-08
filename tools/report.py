@@ -293,15 +293,21 @@ def generate_report(
     for s in verified_stmts:
         grouped_statements.setdefault(s.section, []).append(s.model_dump())
 
-    # Mandatory not_checked / limitations items
+    # Mandatory not_checked / limitations items (R7 upgrades)
     mandatory_limitations = [
         "Computational reproduction only; does not evaluate broader scientific validity or unstated domain assumptions.",
-        "Verified strictly within isolated, deterministic container environment with synthetic benchmark constraints."
+        "Verified strictly within isolated, deterministic container environment with synthetic benchmark constraints.",
+        "Hardware and non-determinism limitation: Floating-point arithmetic, seed variation, and differences across CPU architectures and GPU driver versions may lead to minor metric variances within the reported tolerance window."
     ]
+    unselected_claims = [c for c in state.claims if not c.selected and not c.primary]
     mandatory_not_checked = [
         "Hyperparameter sensitivity beyond reported paper settings.",
         "Performance on out-of-distribution datasets or alternate hardware configurations."
     ]
+    for uc in unselected_claims:
+        mandatory_not_checked.append(
+            f"Claim {uc.id} ({uc.metric} = {uc.reported}, {uc.source_ref}): Excluded from reproduction by human claim picker."
+        )
 
     # Verification summary counters
     total_count = len(stmts_to_process)
@@ -332,13 +338,34 @@ def generate_report(
     reason_str = state.final.get("reason", "") if state.final else ""
     after_n = len(applied_patches)
 
-    # 4. Generate Markdown export
+    # 4. Generate Markdown export (R7 upgraded)
     md_lines = [
         f"# Rerun Verification Report: {state.benchmark_id or state.project_id}",
-        "",
+        ""
+    ]
+    if getattr(state, "simulated", False):
+        md_lines.append("> ⚠️ **SIMULATED RUN**: This reproduction was executed under simulation / fake sandbox mode, not a live container environment.")
+        md_lines.append("")
+
+    md_lines.extend([
         f"**Project ID:** `{state.project_id}`  ",
+        f"**Repository URL:** `{state.repo_url or state.benchmark_id or 'N/A'}`  ",
+        f"**Commit SHA:** `{state.repo_commit or 'HEAD'}`  ",
+        f"**Paper PDF:** `{state.paper_path or 'N/A'}`  ",
         f"**Final Verdict:** `{status_str}` (after {after_n} approved patches)  ",
         f"**Reason:** {reason_str}  ",
+    ])
+
+    # Triage and provisioning metadata
+    triage_info = state.repo_profile.get("triage", {}) if hasattr(state, "repo_profile") and state.repo_profile else {}
+    if triage_info.get("verdict"):
+        md_lines.append(f"**Triage Verdict:** `{triage_info.get('verdict')}` — {triage_info.get('reason', '')}  ")
+
+    if state.provisioning_plan and state.provisioning_plan.get("packages"):
+        pkg_names = [f"`{p.get('package')}`" for p in state.provisioning_plan.get("packages", [])]
+        md_lines.append(f"**Provisioned Dependencies:** {', '.join(pkg_names)}  ")
+
+    md_lines.extend([
         "",
         f"> **Integrity Check:** {verification_summary['summary_text']}",
         "",
@@ -346,15 +373,25 @@ def generate_report(
         "",
         "## 1. Claims & Comparison",
         ""
-    ]
+    ])
 
     if state.claims:
-        md_lines.append("| Claim ID | Metric | Reported | Tolerance | Primary |")
-        md_lines.append("|---|---|---|---|---|")
+        md_lines.append("### Selected Claims")
+        md_lines.append("| Claim ID | Metric | Reported | Tolerance | Primary | Source Ref |")
+        md_lines.append("|---|---|---|---|---|---|")
         for c in state.claims:
-            tol = f"±{c.tolerance.value}" if c.tolerance.type == "abs" else f"±{c.tolerance.value * 100}%"
-            md_lines.append(f"| `{c.id}` | {c.metric} | {c.reported} | {tol} | {'Yes' if c.primary else 'No'} |")
+            if c.selected or c.primary:
+                tol = f"±{c.tolerance.value}" if c.tolerance.type == "abs" else f"±{c.tolerance.value * 100}%"
+                md_lines.append(f"| `{c.id}` | {c.metric} | {c.reported} | {tol} | {'Yes' if c.primary else 'No'} | {c.source_ref} |")
         md_lines.append("")
+
+        if unselected_claims:
+            md_lines.append("### Unselected Claims (Not Checked)")
+            md_lines.append("| Claim ID | Metric | Reported Target | Source Reference | Selection Status |")
+            md_lines.append("|---|---|---|---|---|")
+            for uc in unselected_claims:
+                md_lines.append(f"| `{uc.id}` | {uc.metric} | {uc.reported} | {uc.source_ref} | *Not Checked (Excluded)* |")
+            md_lines.append("")
 
     if runs_summary["comparison_chart"]:
         md_lines.append("### Execution Attempts")
@@ -450,6 +487,8 @@ def generate_report(
 
     limitations_html = "".join([f"<li>{html.escape(lim)}</li>" for lim in mandatory_limitations])
 
+    simulated_html = '<div style="background:#854D0E;color:#FEF3C7;padding:12px 18px;border-radius:8px;font-weight:bold;margin:16px 0;border:1px solid #EAB308;">⚠️ SIMULATED RUN: This reproduction was executed under simulation / fake sandbox mode.</div>' if getattr(state, "simulated", False) else ''
+
     html_doc = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -473,8 +512,14 @@ def generate_report(
 </head>
 <body>
   <div class="container">
+    {simulated_html}
     <h1>Rerun Verification Report</h1>
-    <p><strong>Case:</strong> {html.escape(state.benchmark_id)} &nbsp;|&nbsp; <strong>Project:</strong> <code>{html.escape(state.project_id)}</code></p>
+    <p><strong>Case:</strong> {html.escape(state.benchmark_id or 'Custom')} &nbsp;|&nbsp; <strong>Project:</strong> <code>{html.escape(state.project_id)}</code></p>
+    <div style="background:#0B1220;border:1px solid #1E293B;border-radius:8px;padding:14px;margin:16px 0;font-size:0.9em;">
+      <div><strong>Repository URL:</strong> {html.escape(state.repo_url or state.benchmark_id or 'N/A')}</div>
+      <div><strong>Commit SHA:</strong> <code>{html.escape(state.repo_commit or 'HEAD')}</code></div>
+      <div><strong>Paper PDF:</strong> {html.escape(state.paper_path or 'N/A')}</div>
+    </div>
     <div style="margin: 20px 0;">
       <span class="badge {'badge-reproduced' if status_str == 'REPRODUCED' else ('badge-not' if status_str == 'NOT_REPRODUCED' else 'badge-other')}">{html.escape(status_str)}</span>
       <span style="margin-left: 12px; color: #94A3B8;">after {after_n} approved fixes</span>
@@ -517,6 +562,11 @@ def generate_report(
         "verification_summary": verification_summary,
         "limitations": mandatory_limitations,
         "not_checked": mandatory_not_checked,
+        "simulated": getattr(state, "simulated", False),
+        "repo_url": state.repo_url,
+        "repo_commit": state.repo_commit,
+        "paper_path": state.paper_path,
+        "unselected_claims": [c.model_dump() for c in unselected_claims],
         "markdown": markdown_doc,
         "html": html_doc
     }
