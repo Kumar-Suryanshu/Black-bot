@@ -115,7 +115,13 @@ export interface ProjectBudgets {
 
 export interface ProjectStateSummary {
   project_id: string;
-  benchmark_id: string;
+  source?: 'benchmark' | 'custom';
+  benchmark_id?: string | null;
+  repo_url?: string | null;
+  repo_ref?: string | null;
+  paper_path?: string | null;
+  user_command?: string | null;
+  simulated?: boolean;
   phase: string;
   pending: PendingAction | null;
   budgets: ProjectBudgets;

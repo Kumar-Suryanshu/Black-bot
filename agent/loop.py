@@ -97,36 +97,44 @@ def guard_budgets(state: ProjectState) -> bool:
 
 def handle_ingest(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
-    registry_path = deps.get("registry_path", "benchmarks/registry.json")
-    if not os.path.exists(registry_path):
-        state.phase = "DONE"
-        state.final = {"status": "UNABLE_TO_EXECUTE", "reason": "Registry not found"}
-        return
-
-    with open(registry_path, "r", encoding="utf-8") as f:
-        reg = json.load(f)
-
-    case_info = next((c for c in reg.get("cases", []) if c["id"] == state.benchmark_id), None)
-    if not case_info:
-        state.phase = "DONE"
-        state.final = {"status": "UNABLE_TO_EXECUTE", "reason": f"Benchmark {state.benchmark_id} not allow-listed"}
-        return
-
-    # Setup workspace
     ws_path = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
     os.makedirs(ws_path, exist_ok=True)
-    repo_src = case_info.get("repo_path")
-    if repo_src:
-        repo_src = repo_src.replace("\\","/")
-    if repo_src and os.path.exists(repo_src):
-        for item in Path(repo_src).iterdir():
-            dest = Path(ws_path) / item.name
-            if item.is_dir():
-                shutil.copytree(item, dest, dirs_exist_ok=True)
-            else:
-                shutil.copy2(item, dest)
 
-    deps["paper_path"] = case_info.get("paper_path")
+    if state.source == "custom":
+        if not any(Path(ws_path).iterdir()) and state.repo_url:
+            from tools.ingest import ingest_custom_repo
+            ingest_res = ingest_custom_repo(state.repo_url, state.repo_ref, ws_path)
+            state.repo_commit = ingest_res.get("commit_sha", state.repo_commit)
+    else:
+        registry_path = deps.get("registry_path", "benchmarks/registry.json")
+        if not os.path.exists(registry_path):
+            state.phase = "DONE"
+            state.final = {"status": "UNABLE_TO_EXECUTE", "reason": "Registry not found"}
+            return
+
+        with open(registry_path, "r", encoding="utf-8") as f:
+            reg = json.load(f)
+
+        case_info = next((c for c in reg.get("cases", []) if c["id"] == state.benchmark_id), None)
+        if not case_info:
+            state.phase = "DONE"
+            state.final = {"status": "UNABLE_TO_EXECUTE", "reason": f"Benchmark {state.benchmark_id} not allow-listed"}
+            return
+
+        repo_src = case_info.get("repo_path")
+        if repo_src:
+            repo_src = repo_src.replace("\\","/")
+        if repo_src and os.path.exists(repo_src):
+            for item in Path(repo_src).iterdir():
+                dest = Path(ws_path) / item.name
+                if item.is_dir():
+                    shutil.copytree(item, dest, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(item, dest)
+
+        state.paper_path = case_info.get("paper_path")
+        deps["paper_path"] = state.paper_path
+
     state.phase = "ANALYZE"
 
 def handle_analyze(state: ProjectState, deps: dict):
@@ -134,8 +142,8 @@ def handle_analyze(state: ProjectState, deps: dict):
     ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
     state.repo_profile = inspect_repository(ws)
     
-    paper_path = deps.get("paper_path", "benchmarks/papers/digits_softmax.pdf")
-    paper_text_data = extract_text(paper_path) if os.path.exists(paper_path) else {"full_text": "", "marked_text": ""}
+    paper_path = state.paper_path or deps.get("paper_path", "benchmarks/papers/digits_softmax.pdf")
+    paper_text_data = extract_text(paper_path) if paper_path and os.path.exists(paper_path) else {"full_text": "", "marked_text": ""}
     
     # Solver extract_claims
     try:
@@ -216,6 +224,11 @@ def handle_plan(state: ProjectState, deps: dict):
             effective_config_file="outputs/effective_config.json",
             seeds=[0, 1, 2, 3, 4]
         )
+
+    # Honor user-edited command confirmed at claims-confirm (Fix D11)
+    if state.user_command and state.user_command.strip():
+        state.plan.command = state.user_command.strip()
+        emit_event(state, "human", "command_customized", f"Honored user-customized command: {state.plan.command}")
 
     state.phase = "PREFLIGHT"
 

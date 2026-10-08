@@ -6,7 +6,7 @@ import { abortProject } from '../../api/client';
 
 interface NavbarAppProps {
   projectId?: string;
-  benchmarkId?: string;
+  benchmarkId?: string | null;
   phase?: string;
   status?: string;
   isReportReady?: boolean;

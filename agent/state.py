@@ -123,15 +123,22 @@ class Attempt(BaseModel):
 
 class ProjectState(BaseModel):
     project_id: str
-    benchmark_id: str
-    repo_commit: str
+    source: Literal["benchmark", "custom"] = "benchmark"
+    benchmark_id: str | None = None
+    repo_url: str | None = None
+    repo_ref: str | None = None
+    repo_commit: str = "unknown"
+    paper_path: str | None = None
+    paper_sha256: str | None = None
+    user_command: str | None = None
+    simulated: bool = False
     phase: Phase
     budgets: dict
     claims: list[Claim]
     paper_settings: list[PaperSetting]
     command_confirmed: bool = False
     allow_high_risk: bool = False
-    repo_profile: dict
+    repo_profile: dict = Field(default_factory=dict)
     plan: Plan | None = None
     preflight: dict = Field(default_factory=lambda: {"blockers": []})
     environment: dict = Field(default_factory=dict)

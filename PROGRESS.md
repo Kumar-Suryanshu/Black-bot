@@ -16,7 +16,21 @@
 - [x] **Stage 1 (Completion Plan)**: Make the live path real (R0)
   - *Branch:* `completion/stage-1`
   - *Gate Run Results:* PASS (All 5 benchmark cases `b1_control`, `b2_dependency`, `b3_silent_config`, `b4_combined`, `b5_unable` run in real Docker containers via `DockerSandbox` with base image `rerun-base:py311`; `b1` reproduced with 0 patches; `b2` failed on real `ModuleNotFoundError: No module named 'yaml'`, proposed P-1 PyYAML==6.0.1, offline wheelhouse installed, run 2 reproduced; `b3` executed at calibrated bad accuracy 0.8733, proposed P-1 learning_rate: 0.5, run 2 reproduced at 0.9556; `b4` applied dependency patch then config patch, reproduced at 0.9556; `b5` blocked at preflight `gpu_required` -> `UNABLE_TO_EXECUTE`; 0 occurrences of "Execution completed successfully" in Stage 1 runs; `test_default_sandbox_is_real.py` passed; API startup refuses fake sandbox without `ALLOW_FAKE_SANDBOX=1`; all proof recorded in `docs/real_run_proof.md`; full test suite passes 82 tests).
-  - *Status:* PASS — waiting for go-ahead for Stage 2.
+  - *Status:* PASS
+
+- [x] **Stage 2 (Completion Plan)**: Input plumbing: GitHub URL + PDF upload (R1)
+  - *Branch:* `completion/stage-2`
+  - *Gate Run Results:* PASS:
+    - **API `POST /api/projects`:** supports both `multipart/form-data` (`repo_url`, optional `repo_ref`, `paper` PDF) and legacy JSON (`{benchmark_id}`).
+    - **URL Validation:** strict regex enforcement `^https://github\.com/[\w.-]+/[\w.-]+(\.git)?$` rejecting non-GitHub hosts, `file://`, SSH/`git@`, and credentials/tokens `@`.
+    - **PDF Validation:** `%PDF-` magic header, $\le 25\text{ MB}$, $\le 60$ pages, extractable digital text $\ge 50$ characters (rejects scanned / textless PDFs).
+    - **Contract Updates:** `ProjectState` updated with `source`, `repo_url`, `repo_ref`, `repo_commit`, `paper_path`, `paper_sha256`, `user_command`, `simulated`; documented in `docs/CONTRACTS.md`.
+    - **Ingest Isolation:** shallow clone (`--depth 1 --no-tags --no-recurse-submodules`, no LFS), 120s timeout, non-interactive terminal prompt disabled, $\le 500\text{ MB}$ size cap, $\le 10{,}000$ files cap, fresh `git init` (remote origin and hooks discarded), escaping symlinks audit, CRLF $\rightarrow$ LF line ending normalization.
+    - **Feature Flag & Security Notice:** `ALLOW_CUSTOM_REPOS` feature flag (default on locally, togglable) with required sandbox disclaimer displayed.
+    - **Defect D11 Fixed:** custom command at `CLAIMS_CONFIRM` stored in `state.user_command` and honored in `handle_plan`.
+    - **Frontend `/new`:** source mode switch (*Benchmark | My paper + repo*), GitHub URL validator, optional branch/ref input, drag-and-drop PDF uploader, consent notice banner, and progressive ingest states.
+    - **Tests & Gates:** 24 unit tests covering all 9 failure modes (`test_stage2_input_plumbing.py`), D11 command override test (`test_d11_command_honored.py`), CRLF patch application fixture test (`test_crlf_normalization.py`), and bridge test through custom pipeline (`test_bridge_custom_pipeline.py`). Full suite passes 106 tests.
+  - *Status:* PASS — waiting for user confirmation before Stage 3.
 
 ---
 

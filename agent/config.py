@@ -19,6 +19,20 @@ LARGE_PATCH_FILES = int(os.getenv("LARGE_PATCH_FILES", "2"))
 LARGE_PATCH_LINES = int(os.getenv("LARGE_PATCH_LINES", "20"))
 LOG_CAP_BYTES = int(os.getenv("LOG_CAP_BYTES", "2000000"))
 
+# Feature flags & custom repo ingestion limits
+ALLOW_CUSTOM_REPOS = os.getenv("ALLOW_CUSTOM_REPOS", "1").lower() in ("1", "true", "yes")
+
+def is_custom_repos_allowed() -> bool:
+    return os.getenv("ALLOW_CUSTOM_REPOS", "1").lower() in ("1", "true", "yes")
+
+CUSTOM_REPO_CLONE_TIMEOUT_S = int(os.getenv("CUSTOM_REPO_CLONE_TIMEOUT_S", "120"))
+CUSTOM_REPO_MAX_SIZE_MB = int(os.getenv("CUSTOM_REPO_MAX_SIZE_MB", "500"))
+CUSTOM_REPO_MAX_FILES = int(os.getenv("CUSTOM_REPO_MAX_FILES", "10000"))
+MAX_PDF_SIZE_BYTES = 25 * 1024 * 1024  # 25 MB
+MAX_PDF_PAGES = 60
+GITHUB_REPO_URL_REGEX = r"^https://github\.com/[\w.-]+/[\w.-]+(\.git)?$"
+CUSTOM_REPO_CONSENT_TEXT = "This runs third-party code in a sandbox; Docker is not a perfect boundary. Your paper is sent to an LLM provider."
+
 # Provider settings
 SOLVER_PROVIDER = os.getenv("SOLVER_PROVIDER", "gemini")
 SOLVER_MODEL = os.getenv("SOLVER_MODEL", "gemini-3.1-flash-lite")
