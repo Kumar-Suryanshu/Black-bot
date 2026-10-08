@@ -280,9 +280,15 @@ def confirm_claims(id: str, req: ClaimsConfirmRequest):
     state.claims = req.claims
     state.allow_high_risk = req.allow_high_risk
     if req.command:
+        from tools.commands import validate_command
+        val_cmd = validate_command(req.command, workspace=state.workspace or f"data/runs/{id}/workspace")
+        if not val_cmd["valid"]:
+            raise HTTPException(status_code=400, detail=val_cmd["reason"])
         state.user_command = req.command
         if state.plan:
             state.plan.command = req.command
+    if req.run_timeout_s:
+        state.run_timeout_s = min(1800, max(5, int(req.run_timeout_s)))
     state.command_confirmed = True
     
     save_project_state("data/rerun.db", id, state.benchmark_id, state.repo_commit, state.phase, state)

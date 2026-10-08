@@ -91,7 +91,19 @@
     - **Base Image Selection:** Accurately selects `rerun-base:py39|py310|py311|py312` based on triage report or `pyproject.toml` `requires-python` specification (`test_python_image_selection`).
     - **API & UI Wiring:** Added `GET /api/projects/{id}/provisioning/plan`, `POST /api/projects/{id}/provisioning/approve`, `POST /api/projects/{id}/provisioning/reject`, client methods, and pending action types.
     - **Test Suite Status:** 7/7 tests passing in `tests/unit/test_stage6_provisioning.py`; full suite passing 145/145 tests (`pytest tests -q`); frontend builds cleanly (`npm run build --prefix frontend`).
-  - *Status:* PASS — ready for Stage 7 (Generic command + metric extraction).
+- [x] **Stage 7 (Completion Plan)**: Generic command + metric extraction (R4)
+  - *Branch:* `completion/stage-7`
+  - *Gate Run Results:* PASS:
+    - **Command Validator & Runner Safety:** `validate_command()` enforces commands execute strictly as argv lists, never via `sh -c`. Rejects forbidden shell operators (pipes `|`, redirects `>`, `<`, `>>`, chaining `;`, `&&`, `||`, substitutions `$()`, backticks, backgrounding `&`, and multiline strings). Rejects unsupported runners (`make`, `torchrun`, `deepspeed`, `accelerate`, `jupyter`, `pytest`) with helpful diagnostic guidance. Verifies target script exists when workspace directory is present (`test_command_validator_rejects_injection_forms_table`).
+    - **README Command Extraction (D7):** `extract_readme_commands()` cleanly strips `$ `, `# `, `> ` shell prompts, detects `python -m <module>` invocations, handles bash scripts and markdown code fences (`test_readme_command_extraction_handles_prompts_and_formats`).
+    - **Deterministic Tolerance Advisor:** `recommend_tolerance()` calculates deterministic suggestions: uncertainty $a \pm s \to \max(s, \text{rounding})$; 2 decimals $\to \pm 0.005$; 1 decimal $\to \pm 0.05$; integers / defaults $\to$ suggested $\pm 1$ point ($0.01$ for fractions $\le 1.0$, else $1.0$) (`test_deterministic_tolerance_advisor`).
+    - **Generic Metric Extraction Engine (D8):** `extract_metric()` supports `results.json` convention, arbitrary JSON files with nested dot notation, CSV files with column matching/aggregations, text files, and stdout/log regex with named capture groups `(?P<val>...)` and percentage normalization. On failure, returns `MetricExtractionResult(success=False, value=None)`, **NEVER** defaulting to 0 (`test_metric_extraction_fixture_stdout_regex`, `test_metric_extraction_fixture_csv`, `test_metric_extraction_fixture_custom_json_key`, `test_non_matching_regex_produces_inconclusive_never_zero`).
+    - **Evidence Ledger Integration:** `record_metric_evidence()` snapshots extracted result files and log snippets into the immutable evidence ledger (`E-###`).
+    - **Status & Confidence Factor Calibration:** Non-matching extractions yield `INCONCLUSIVE` (reason: `metric extraction failed`). Single-run results ($n=1$) record `variance: "n=1, variance unknown"` in `confidence_factors` (`test_single_run_records_variance_unknown_confidence_factor`).
+    - **Configurable Timeout:** Added `run_timeout_s` (hard-capped at 1800s / 30m) with runtime override in `DockerSandbox`.
+    - **Absence of Hardcoded Metrics:** Confirmed via codebase grep that `test_accuracy_mean` appears only in backward-compatible benchmark shims and documentation.
+    - **Test Suite Status:** 8/8 tests passing in `tests/unit/test_stage7_commands_metrics.py`; full suite passing 153/153 tests (`pytest tests -q`); frontend builds cleanly (`npm run build --prefix frontend`).
+  - *Status:* PASS — ready for Stage 8.
 
 ---
 

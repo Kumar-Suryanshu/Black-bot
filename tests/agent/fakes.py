@@ -387,7 +387,7 @@ def get_fake_script_b4_combined() -> list:
             "confidence": "high",
             "model": "fake"
         }),
-        # 7. diagnose_step: inspect_file (to record E-002)
+        # 7. diagnose_step: inspect_file (to record E-003)
         ("solver", "diagnose_step", {
             "reason": "Accuracy is too low. Let's inspect the config file.",
             "hypotheses": [],
@@ -403,7 +403,7 @@ def get_fake_script_b4_combined() -> list:
                 "id": "H-2",
                 "text": "Learning rate mismatch",
                 "status": "confirmed",
-                "evidence": ["E-002"],
+                "evidence": ["E-003"],
                 "tested_with": ["inspect_file"],
                 "error_class": "config_mismatch"
             }],
@@ -417,7 +417,7 @@ def get_fake_script_b4_combined() -> list:
             "hypothesis_id": "H-2",
             "type": "config_value",
             "rationale": "Paper specifies lr=0.5 but config uses 0.01",
-            "evidence": ["E-002"],
+            "evidence": ["E-003"],
             "alternatives_considered": [],
             "edits": [{
                 "file": "configs/default.yaml",
@@ -443,7 +443,7 @@ def get_fake_script_b4_combined() -> list:
                 "alternative_explanations_considered": True,
                 "reversible_and_smoke_testable": True
             },
-            "verified_evidence": [{"id": "E-002", "what_i_found": "learning_rate: 0.01"}],
+            "verified_evidence": [{"id": "E-003", "what_i_found": "learning_rate: 0.01"}],
             "objections": [],
             "required_changes": [],
             "confidence": "high",

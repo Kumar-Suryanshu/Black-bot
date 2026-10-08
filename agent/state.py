@@ -14,6 +14,14 @@ class Tolerance(BaseModel):
     type: Literal["abs","rel"] = "abs"
     value: float = 0.01
 
+class MetricExtraction(BaseModel):
+    kind: Literal["results_json", "json_file", "csv_file", "regex_log", "txt_file"] = "results_json"
+    path: str | None = None
+    key: str | None = None
+    regex: str | None = None
+    column: str | None = None
+    aggregation: Literal["last", "mean_over_seeds", "max", "min", "first"] = "last"
+
 class Claim(BaseModel):
     id: str = "C-1"
     statement: str
@@ -22,6 +30,7 @@ class Claim(BaseModel):
     reported: float
     tolerance: Tolerance = Field(default_factory=Tolerance)
     result_key: str | None = None
+    metric_extraction: MetricExtraction | None = None
     source_ref: str
     source_quote: str
     primary: bool = True
@@ -111,7 +120,7 @@ class Attempt(BaseModel):
     patches_applied: list[str]
     exit_code: int | None
     error_class: ErrorClass | None = None
-    metrics: dict[str, float] | None = None
+    metrics: dict[str, Any] | None = None
     comparison: list[dict] | None = None
     evidence: list[str] = Field(default_factory=list)
     outcome: str | None = None
@@ -120,6 +129,7 @@ class Attempt(BaseModel):
     duration_s: float | None = None
     timed_out: bool = False
     oom: bool = False
+    log_path: str | None = None
 
 class ProjectState(BaseModel):
     project_id: str
@@ -131,6 +141,7 @@ class ProjectState(BaseModel):
     paper_path: str | None = None
     paper_sha256: str | None = None
     user_command: str | None = None
+    run_timeout_s: int | None = None
     simulated: bool = False
     phase: Phase
     budgets: dict

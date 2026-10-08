@@ -163,7 +163,7 @@ def build_container_spec(project_id: str, workspace: Path, is_setup: bool, comma
             
     return spec
 
-def run_container(project_id: str, workspace: Path, is_setup: bool, command: str, kind: str, n: int, python_image: str = "rerun-base:py311") -> RunResult:
+def run_container(project_id: str, workspace: Path, is_setup: bool, command: str, kind: str, n: int, python_image: str = "rerun-base:py311", run_timeout_override: Optional[int] = None) -> RunResult:
     limits = get_limits()
     client = docker.from_env()
     
@@ -218,7 +218,7 @@ def run_container(project_id: str, workspace: Path, is_setup: bool, command: str
     log_thread.daemon = True
     log_thread.start()
     
-    timeout_s = limits.install_timeout_s if is_setup else limits.run_timeout_s
+    timeout_s = limits.install_timeout_s if is_setup else (run_timeout_override or limits.run_timeout_s)
     
     # 3. Wait
     timed_out = False
