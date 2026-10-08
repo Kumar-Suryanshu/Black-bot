@@ -2,6 +2,9 @@ import os
 import re
 from dataclasses import dataclass
 from typing import Literal
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Appendix B & §4 default constants
 MAX_STEPS = int(os.getenv("MAX_STEPS", "40"))

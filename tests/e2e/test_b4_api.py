@@ -16,9 +16,9 @@ def test_b4_api_e2e(monkeypatch):
     fake_llm = FakeLLM(get_fake_script_b4_combined())
     set_fake_llm(fake_llm)
     monkeypatch.setattr(agent.llm, "LLM_MODE", "replay")
-    # Use cassette replay mode
     monkeypatch.setenv("LLM_MODE", "replay")
     monkeypatch.setenv("SANDBOX_TYPE", "fake")
+    monkeypatch.setenv("ALLOW_FAKE_SANDBOX", "1")
     
     sb = get_sandbox()
     sb.register("b4_combined", 1, 1, "ModuleNotFoundError: No module named 'yaml'", {})
@@ -91,7 +91,7 @@ def test_b4_api_e2e(monkeypatch):
             if state["pending"] and state["pending"].get("kind") == "approval" and state["pending"]["id"] != approval_id_1:
                 break
             time.sleep(0.1)
-            
+
         assert state["pending"]["kind"] == "approval"
         approval_id_2 = state["pending"]["id"]
         

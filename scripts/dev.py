@@ -2,6 +2,8 @@
 import argparse
 import subprocess
 import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -80,7 +82,8 @@ def main():
     subparsers.add_parser("adversarial")
     subparsers.add_parser("record")
     subparsers.add_parser("replay")
-    subparsers.add_parser("run")
+    run_parser = subparsers.add_parser("run")
+    run_parser.add_argument("--case", required=True, help="Benchmark case id (b1_control, b2_dependency, b3_silent_config, b4_combined, b5_unable)")
     subparsers.add_parser("build-benchmarks")
     subparsers.add_parser("export-digits")
 
@@ -120,6 +123,9 @@ def main():
         run_cmd(f"{sys.executable} benchmarks/run_bench.py --systems {args.systems}")
     elif args.command == "adversarial":
         run_cmd(f"{sys.executable} scripts/run_adversarial.py")
+    elif args.command == "run":
+        from scripts.run_case import run_case_headless
+        run_case_headless(args.case)
     else:
         print(f"Command '{args.command}' is not yet implemented fully.")
 
