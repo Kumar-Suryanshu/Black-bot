@@ -73,6 +73,45 @@ def _parse_numeric(raw_val: Any, reported_hint: Optional[float] = None) -> Optio
     except (ValueError, TypeError):
         return None
 
+def _claim_candidate_keys(claim: Claim) -> List[str]:
+    """
+    Keys that may legitimately hold THIS claim's value, most specific first.
+
+    Deliberately excludes generic names like "accuracy", "score" and "metric": matching those
+    for an unrelated claim is how a claim about one metric came to be verified against another.
+    "test_accuracy_mean" is included only when the claim actually identifies it, which covers
+    the benchmark cases, whose result_key is wired by handle_plan.
+    """
+    keys: List[str] = [claim.result_key, claim.metric, claim.id]
+    if claim.metric:
+        keys.append(f"{claim.metric}_mean")
+    if claim.result_key == "test_accuracy_mean" or claim.metric == "test_accuracy":
+        keys.append("test_accuracy_mean")
+
+    seen: set = set()
+    ordered: List[str] = []
+    for k in keys:
+        if k and k not in seen:
+            seen.add(k)
+            ordered.append(k)
+    return ordered
+
+def _describe_available_keys(ws: Path, plan: Optional[Any]) -> str:
+    """Names the keys actually present in the results file, so the failure is actionable."""
+    candidates = [ws / "outputs" / "results.json", ws / "results.json", ws / "eval.json"]
+    out_file = getattr(plan, "output_file", None) if plan else None
+    if out_file:
+        candidates.insert(0, ws / out_file)
+    for path in candidates:
+        try:
+            if path.exists():
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    return f"Keys present in {path.name}: {sorted(data.keys())}."
+        except Exception:
+            continue
+    return "No parseable results file was found."
+
 def extract_metric(
     workspace: Path | str,
     claim: Claim,
@@ -147,56 +186,57 @@ def extract_metric(
     # ---------------------------------------------------------
     # Case B: Auto-Discovery Pipeline
     # ---------------------------------------------------------
+    # Only keys that identify THIS claim are eligible. Generic keys such as "accuracy",
+    # "score" and "metric" were previously tried for every claim, so a claim about f1_score
+    # could be silently verified against test_accuracy_mean. Verifying the wrong number is
+    # worse than failing, so an unresolvable claim now reports why instead of guessing.
+    candidate_keys = _claim_candidate_keys(claim)
+
     # 1. Try results.json (convention)
     default_json = ws / "outputs" / "results.json"
     if default_json.exists():
-        candidate_keys = [
-            claim.result_key,
-            claim.metric,
-            claim.id,
-            f"{claim.metric}_mean",
-            "test_accuracy_mean",  # benchmark compatibility
-            "accuracy",
-            "score",
-            "metric"
-        ]
-        candidate_keys = [k for k in candidate_keys if k]
         for k in candidate_keys:
             res = _extract_from_json(default_json, k, "last", plan, claim.reported)
             if res.success:
                 return res
 
-    # 2. Try candidate CSV files in workspace
+    # 2. Try candidate CSV files in workspace. The single-column fallback is disabled here:
+    #    during auto-discovery an unrelated one-column CSV must not be read as this metric.
     for csv_candidate in [ws / "metrics.csv", ws / "outputs" / "metrics.csv", ws / "results.csv"]:
         if csv_candidate.exists():
-            res = _extract_from_csv(csv_candidate, claim.metric, "last", claim.reported)
-            if res.success:
-                return res
+            for k in candidate_keys:
+                res = _extract_from_csv(
+                    csv_candidate, k, "last", claim.reported,
+                    allow_single_column_fallback=False
+                )
+                if res.success:
+                    return res
 
     # 3. Try candidate JSON files in workspace
     for json_candidate in [ws / "eval.json", ws / "results.json", ws / "outputs" / "eval.json"]:
         if json_candidate.exists():
-            res = _extract_from_json(json_candidate, claim.metric, "last", plan, claim.reported)
+            for k in candidate_keys:
+                res = _extract_from_json(json_candidate, k, "last", plan, claim.reported)
+                if res.success:
+                    return res
+
+    # 4. Try Regex over log, keyed on the claim's own metric names only. A bare "Accuracy:"
+    #    pattern used to match here regardless of what the claim was about.
+    if log_path and os.path.exists(log_path):
+        for key in candidate_keys:
+            pat = rf"(?i){re.escape(key)}\s*[:=]\s*(?P<val>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?%?)"
+            res = _extract_from_regex(Path(log_path), pat, claim.reported)
             if res.success:
                 return res
 
-    # 4. Try Regex over log
-    if log_path and os.path.exists(log_path):
-        # Specific metric pattern
-        pat1 = rf"(?i){re.escape(claim.metric)}\s*[:=]\s*(?P<val>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?%?)"
-        res1 = _extract_from_regex(Path(log_path), pat1, claim.reported)
-        if res1.success:
-            return res1
-
-        # Common headline pattern e.g. "Accuracy: 93.1%"
-        pat2 = r"(?i)Accuracy\s*[:=]\s*(?P<val>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?%?)"
-        res2 = _extract_from_regex(Path(log_path), pat2, claim.reported)
-        if res2.success:
-            return res2
-
     return MetricExtractionResult(
         success=False,
-        error=f"Metric extraction failed: unable to extract '{claim.metric}' ({claim.id}) from outputs or logs"
+        error=(
+            f"Metric extraction failed for {claim.id}: none of the keys "
+            f"{candidate_keys} were found in outputs or logs. "
+            f"{_describe_available_keys(ws, plan)} "
+            f"Set claim.metric_extraction to name the file and key explicitly."
+        )
     )
 
 def _extract_from_json(
@@ -272,7 +312,8 @@ def _extract_from_csv(
     csv_path: Path,
     col_name: str,
     aggregation: str,
-    reported_hint: Optional[float]
+    reported_hint: Optional[float],
+    allow_single_column_fallback: bool = True
 ) -> MetricExtractionResult:
     if not csv_path.exists():
         return MetricExtractionResult(success=False, error=f"CSV file not found: {csv_path}")
@@ -297,12 +338,17 @@ def _extract_from_csv(
             break
 
     if not matched_col:
-        # Check if there is only 1 or 2 columns, pick the last numeric one
+        # A single-column file is taken to be the metric only when the caller named this file
+        # explicitly via claim.metric_extraction. During auto-discovery that would be a
+        # cross-metric guess, so it is refused.
         cols = list(rows[0].keys())
-        if len(cols) == 1:
+        if len(cols) == 1 and allow_single_column_fallback:
             matched_col = cols[0]
         else:
-            return MetricExtractionResult(success=False, error=f"Column '{col_name}' not found in CSV {csv_path}")
+            return MetricExtractionResult(
+                success=False,
+                error=f"Column '{col_name}' not found in CSV {csv_path} (columns: {cols})"
+            )
 
     vals = []
     for r in rows:

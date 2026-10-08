@@ -443,8 +443,10 @@ def handle_validate(state: ProjectState, deps: dict):
             metrics_dict[c.id] = ext_res.value
             metrics_dict[c.metric] = ext_res.value
 
-            # Benchmark compatibility shim
-            if state.benchmark_id or c.metric == "test_accuracy":
+            # Benchmark compatibility key, written only for the claim that actually identifies
+            # it. Writing it for every claim meant the last claim in the loop overwrote the
+            # shared key, and COMPARE then read another claim's number through it.
+            if c.result_key == "test_accuracy_mean" or c.metric == "test_accuracy":
                 metrics_dict["test_accuracy_mean"] = ext_res.value
                 if ext_res.std is not None:
                     metrics_dict["test_accuracy_std"] = ext_res.std
@@ -481,11 +483,13 @@ def handle_compare(state: ProjectState, deps: dict):
     for c in state.claims:
         obs_val = None
         if latest.metrics:
+            # Only this claim's own keys. The previous unconditional fall-through to
+            # "test_accuracy_mean" could compare a claim against another metric's value.
             obs_val = latest.metrics.get(c.id)
             if obs_val is None:
                 obs_val = latest.metrics.get(c.metric)
-            if obs_val is None and "test_accuracy_mean" in latest.metrics:
-                obs_val = latest.metrics["test_accuracy_mean"]
+            if obs_val is None and c.result_key:
+                obs_val = latest.metrics.get(c.result_key)
 
         res = compare(c, obs_val)
         comparisons.append(res)

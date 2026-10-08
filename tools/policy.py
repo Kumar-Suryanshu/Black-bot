@@ -35,6 +35,79 @@ def compute_fix_signature(file: str, op: str, new_val: str) -> str:
     src = f"{file}|{op}|{norm_new}"
     return hashlib.sha1(src.encode("utf-8")).hexdigest()
 
+def get_canonical_key_for_policy(key: str) -> str:
+    """Canonical parameter name, so `lr` is recognised as `learning_rate` for guard checks."""
+    from tools.config_audit import get_canonical_key
+    return get_canonical_key(key)
+
+def parse_config_assignment(text: str) -> tuple:
+    """
+    Splits a single config assignment into (key, raw_value) for `key: value` or `key = value`.
+    Returns (None, None) when the line is not an assignment.
+    """
+    if not text:
+        return (None, None)
+    line = text.strip().splitlines()[0].strip() if text.strip() else ""
+    for sep in (":", "="):
+        if sep in line:
+            key, _, raw_value = line.partition(sep)
+            key = key.strip().strip("\"'")
+            raw_value = raw_value.strip()
+            if key:
+                return (key, raw_value)
+    return (None, None)
+
+def values_match(paper_value: Any, proposed_raw: str) -> bool:
+    """
+    True only when the proposed value genuinely equals the paper-stated value.
+
+    This used to be `str(paper_value) not in edit.new`, a substring test, so a paper-stated
+    0.5 accepted `learning_rate: 10.567` and `learning_rate: 0.555`. That defeated the single
+    control standing between the Solver and metric-chasing, so the comparison now parses both
+    sides. Anything unparseable fails closed.
+    """
+    from tools.config_audit import _parse_val
+
+    if proposed_raw is None:
+        return False
+
+    # Strip inline comments and quotes that would otherwise defeat parsing
+    cleaned = proposed_raw.split("#", 1)[0].strip().strip("\"'")
+    if cleaned == "":
+        return False
+
+    parsed = _parse_val(cleaned)
+
+    if isinstance(paper_value, bool) or isinstance(parsed, bool):
+        if isinstance(paper_value, bool) and isinstance(parsed, bool):
+            return paper_value is parsed
+        return False
+
+    if isinstance(paper_value, (int, float)):
+        if isinstance(parsed, (int, float)):
+            return abs(float(paper_value) - float(parsed)) <= 1e-9
+        return False
+
+    return str(paper_value).strip().casefold() == str(parsed).strip().casefold()
+
+def find_paper_setting(state, key_name: str):
+    """
+    Locates the paper setting for a config key, tolerating aliases so that a repo's `lr`
+    is matched against a paper's `learning_rate`.
+    """
+    from tools.config_audit import get_canonical_key
+
+    for ps in state.paper_settings:
+        if ps.key == key_name:
+            return ps
+    canonical = get_canonical_key(key_name)
+    for ps in state.paper_settings:
+        if get_canonical_key(ps.key) == canonical:
+            return ps
+        if getattr(ps, "repo_key", None) and ps.repo_key == key_name:
+            return ps
+    return None
+
 def check(state, proposal, workspace: str = None) -> Dict[str, Any]:
     violations = []
     flags = []
@@ -152,35 +225,36 @@ def check(state, proposal, workspace: str = None) -> Dict[str, Any]:
 
         # Config value checks
         if proposal.type == "config_value":
-            # Extract key being modified
-            key_name = None
-            if ":" in edit.new:
-                key_name = edit.new.split(":")[0].strip()
-            elif "=" in edit.new:
-                key_name = edit.new.split("=")[0].strip()
-                
+            key_name, proposed_raw = parse_config_assignment(edit.new)
+
             if key_name:
-                is_sensitive = key_name in SENSITIVE_KEYS
-                # Find corresponding paper setting
-                paper_setting = next((ps for ps in state.paper_settings if ps.key == key_name), None)
-                
+                is_sensitive = get_canonical_key_for_policy(key_name) in SENSITIVE_KEYS or key_name in SENSITIVE_KEYS
+                # Find corresponding paper setting (alias-tolerant)
+                paper_setting = find_paper_setting(state, key_name)
+
                 if is_sensitive:
                     if not paper_setting:
                         violations.append(f"P4: Sensitive key '{key_name}' is not stated in paper settings (sensitive_key_locked)")
                     else:
-                        # Value must equal paper value
-                        expected_val = str(paper_setting.value).strip()
-                        if expected_val not in edit.new:
-                            violations.append(f"P4: Sensitive key '{key_name}' can only be modified to match paper value {expected_val} (sensitive_key_locked)")
+                        # Value must equal the paper value, compared as a parsed value
+                        expected_val = paper_setting.value
+                        if not values_match(expected_val, proposed_raw):
+                            violations.append(
+                                f"P4: Sensitive key '{key_name}' can only be modified to match paper value "
+                                f"{expected_val} (got {proposed_raw!r}) (sensitive_key_locked)"
+                            )
                         else:
                             flags.append("sensitive_key")
                             requires_extra_confirm = True
                 else:
                     # Non-sensitive parameter
                     if paper_setting:
-                        expected_val = str(paper_setting.value).strip()
-                        if expected_val not in edit.new:
-                            violations.append(f"P6: Parameter '{key_name}' does not match paper-stated value {expected_val}")
+                        expected_val = paper_setting.value
+                        if not values_match(expected_val, proposed_raw):
+                            violations.append(
+                                f"P6: Parameter '{key_name}' does not match paper-stated value "
+                                f"{expected_val} (got {proposed_raw!r})"
+                            )
                     else:
                         # Non-paper parameter: allowed only if error-driven (§10.7, P6)
                         has_error_provenance = False

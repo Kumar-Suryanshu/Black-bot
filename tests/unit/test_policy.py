@@ -139,3 +139,58 @@ def test_policy_non_paper_param_without_error_provenance():
     assert res["passed"] is False
     assert any("no_provenance" in v for v in res["violations"])
 
+
+
+# ---------------------------------------------------------------------------
+# Value provenance (regression)
+#
+# P4/P6 used to decide "does this match the paper?" with `str(paper_value) not in edit.new`,
+# a substring test. With a paper-stated learning_rate of 0.5 that accepted 0.555 and 10.567,
+# which defeats the single control standing between the Solver and metric-chasing.
+# ---------------------------------------------------------------------------
+
+import pytest
+
+
+@pytest.mark.parametrize("proposed,should_pass", [
+    ("learning_rate: 0.5", True),            # exact
+    ("learning_rate: 0.50", True),           # same value, different spelling
+    ("learning_rate: 5e-1", True),           # same value, scientific notation
+    ("learning_rate: 0.5  # from paper", True),  # inline comment
+    ("lr: 0.5", True),                       # alias of the paper key
+    ("learning_rate: 0.555", False),         # contains "0.5" as a substring
+    ("learning_rate: 10.567", False),        # contains "0.5" as a substring
+    ("learning_rate: 0.7", False),           # plainly different
+    ("learning_rate: not_a_number", False),  # unparseable fails closed
+])
+def test_paper_value_match_is_numeric_not_substring(proposed, should_pass):
+    state = make_test_state()
+    prop = PatchProposal(
+        id="p1", hypothesis_id="h1", type="config_value",
+        rationale="Align learning rate with the paper-stated value",
+        evidence=["E-001"], alternatives_considered=[],
+        edits=[Edit(file="configs/default.yaml", op="replace_text",
+                    old="learning_rate: 0.01", new=proposed)],
+    )
+    res = check(state, prop)
+    assert res["passed"] is should_pass, (
+        f"{proposed!r}: expected passed={should_pass}, got {res['passed']} "
+        f"violations={res['violations']}"
+    )
+
+
+def test_sensitive_key_value_match_is_numeric_not_substring():
+    """The same hole existed on the guarded-key path, which is the stricter of the two."""
+    state = make_test_state(paper_settings=[
+        PaperSetting(key="epochs", value=20, source_ref="p.1", source_quote="epochs = 20")
+    ])
+    # 200 contains "20" as a substring but is not the paper value.
+    prop = PatchProposal(
+        id="p1", hypothesis_id="h1", type="config_value", rationale="match paper epochs",
+        evidence=["E-001"], alternatives_considered=[],
+        edits=[Edit(file="configs/default.yaml", op="replace_text",
+                    old="epochs: 10", new="epochs: 200")],
+    )
+    res = check(state, prop)
+    assert res["passed"] is False
+    assert any("sensitive_key_locked" in v for v in res["violations"])

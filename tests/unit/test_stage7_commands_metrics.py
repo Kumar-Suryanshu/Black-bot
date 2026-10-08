@@ -398,3 +398,74 @@ def test_single_run_records_variance_unknown_confidence_factor():
     status_res = compute_status(state)
     assert "confidence_factors" in status_res
     assert status_res["confidence_factors"].get("variance") == "n=1, variance unknown"
+
+
+# ---------------------------------------------------------------------------
+# Cross-metric contamination (regression)
+#
+# The auto-discovery chain used to try "test_accuracy_mean", "accuracy", "score" and "metric"
+# for every claim, so a claim about f1_score was silently verified against an accuracy value
+# and reported success. Verifying the wrong number is the worst failure mode for this system,
+# so an unresolvable claim must now fail loudly instead.
+# ---------------------------------------------------------------------------
+
+def test_claim_is_never_verified_against_an_unrelated_metric(tmp_path):
+    """A claim whose own key is absent must fail, not borrow another metric's value."""
+    ws = tmp_path / "ws_cross_metric"
+    (ws / "outputs").mkdir(parents=True)
+    (ws / "outputs" / "results.json").write_text(json.dumps({
+        "test_accuracy_mean": 0.956,
+        "bleu": 31.2,
+    }))
+
+    claim = Claim(
+        id="C-1", statement="F1 of 0.81", metric="f1_score", reported=0.81,
+        source_ref="Table 1", source_quote="F1 0.81",
+    )
+
+    res = extract_metric(ws, claim)
+    assert res.success is False
+    assert res.value is None
+    # The reason must be actionable: it names the keys that are actually present.
+    assert "f1_score" in res.error
+    assert "test_accuracy_mean" in res.error
+
+
+def test_claims_whose_key_is_present_still_resolve(tmp_path):
+    """The tightened chain must not break legitimate extraction."""
+    ws = tmp_path / "ws_present"
+    (ws / "outputs").mkdir(parents=True)
+    (ws / "outputs" / "results.json").write_text(json.dumps({
+        "test_accuracy_mean": 0.956,
+        "bleu": 31.2,
+    }))
+
+    accuracy_claim = Claim(
+        id="C-1", statement="acc 0.956", metric="test_accuracy", reported=0.956,
+        result_key="test_accuracy_mean", source_ref="p.1", source_quote="0.956",
+    )
+    res = extract_metric(ws, accuracy_claim)
+    assert res.success is True
+    assert abs(res.value - 0.956) < 1e-9
+
+    bleu_claim = Claim(
+        id="C-2", statement="bleu 31.2", metric="bleu", reported=31.2,
+        source_ref="p.2", source_quote="31.2",
+    )
+    res2 = extract_metric(ws, bleu_claim)
+    assert res2.success is True
+    assert abs(res2.value - 31.2) < 1e-9
+
+
+def test_single_column_csv_is_not_guessed_during_auto_discovery(tmp_path):
+    """An unrelated one-column CSV must not be read as the claim's metric."""
+    ws = tmp_path / "ws_single_col"
+    ws.mkdir()
+    (ws / "metrics.csv").write_text("wall_clock_seconds\n123.4\n")
+
+    claim = Claim(
+        id="C-1", statement="F1 of 0.81", metric="f1_score", reported=0.81,
+        source_ref="Table 1", source_quote="F1 0.81",
+    )
+    res = extract_metric(ws, claim)
+    assert res.success is False
