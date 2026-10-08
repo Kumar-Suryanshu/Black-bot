@@ -128,6 +128,10 @@ def main():
     elif args.command == "run":
         from scripts.run_case import run_case_headless
         run_case_headless(args.case)
+    elif args.command == "api":
+        run_cmd(f"{sys.executable} -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload")
+    elif args.command == "ui":
+        run_cmd("npm run dev --prefix frontend")
     else:
         print(f"Command '{args.command}' is not yet implemented fully.")
 
