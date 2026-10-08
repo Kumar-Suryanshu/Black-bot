@@ -666,7 +666,11 @@ def handle_diagnose(state: ProjectState, deps: dict):
 def handle_patch_propose(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
     ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
-    
+
+    # Charge a step for every proposal. Defence in depth: even if the revision round counter
+    # were ever wrong again, guard_budgets still bounds the propose/policy/review cycle.
+    state.budgets["steps_used"] = state.budgets.get("steps_used", 0) + 1
+
     try:
         patch_out = llm_call(
             "solver", "propose_patch",
@@ -749,27 +753,52 @@ def handle_policy_check(state: ProjectState, deps: dict):
 def handle_critic_review(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
     patch = state.patches[-1]
-    round_num = len([r for r in state.critic_reviews if r.patch_id == patch.id]) + 1
-    
+
+    # Revision rounds are counted per revision *lineage*, not per patch id. A REVISE sends the
+    # run back to PATCH_PROPOSE, which appends a brand-new patch; counting reviews by patch id
+    # therefore reset the round to 1 forever and the critic could never exhaust its rounds.
+    round_num = state.budgets.get("critic_revision_round", 0) + 1
+
     review = review_patch(state, patch, round_num=round_num)
     state.critic_reviews.append(review)
     patch.critic_status = review.verdict.lower()
-    
+
     decision = decide_patch(patch.policy_result, review, round_num, CRITIC_ROUNDS_MAX)
-    
+
     if decision.action == "DROP":
         patch.status = "dropped"
         state.failed_fixes.append(patch.fix_signature)
+        state.budgets["critic_revision_round"] = 0
         state.phase = "DIAGNOSE"
     elif decision.action == "REVISE":
+        # The next PATCH_PROPOSE supersedes this patch, so retire it rather than leaving a
+        # growing list of patches that are all still "proposed".
+        patch.status = "dropped"
+        state.budgets["critic_revision_round"] = round_num
+        emit_event(
+            state, "arbiter", "patch_revision_requested",
+            f"Critic requested revision of {patch.id} (round {round_num}/{CRITIC_ROUNDS_MAX})"
+        )
         state.phase = "PATCH_PROPOSE"
     elif decision.action == "TO_HUMAN":
         app_id = f"A-{len(state.approvals) + 1}"
         state.pending = {"kind": "approval", "id": app_id, "patch_id": patch.id, "banner": decision.banner}
+        state.budgets["critic_revision_round"] = 0
         state.phase = "APPROVAL"
 
 def handle_approval(state: ProjectState, deps: dict):
-    patch = state.patches[-1]
+    # Resolve the patch the human was actually asked about, not merely the most recent one.
+    pending_patch_id = (state.pending or {}).get("patch_id")
+    patch = next((p for p in state.patches if p.id == pending_patch_id), None)
+    if patch is None:
+        emit_event(
+            state, "system", "error",
+            f"APPROVAL phase has no patch matching pending patch_id {pending_patch_id!r}"
+        )
+        state.pending = None
+        state.phase = "DIAGNOSE"
+        return
+
     # Check if approved
     matching_app = next((a for a in state.approvals if a.patch_id == patch.id), None)
     if not matching_app:

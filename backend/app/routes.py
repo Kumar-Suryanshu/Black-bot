@@ -432,26 +432,38 @@ def get_pending_approval(id: str):
         "banner": state.pending.get("banner")
     }
 
-@router.post("/api/approvals/{approval_id}")
-def process_approval(approval_id: str, req: ApprovalRequest):
-    # Search all projects for this pending approval ID
-    conn = get_connection("data/rerun.db")
+def _find_project_by_pending_id(pending_id: str, db_path: str = "data/rerun.db") -> Optional[str]:
+    """
+    Locates the project whose pending gate carries `pending_id`, reading the raw JSON rather
+    than validating every ProjectState. A single unreadable row must not break approvals for
+    every other project, so the scan never constructs a model.
+    """
+    conn = get_connection(db_path)
     cursor = conn.cursor()
-    cursor.execute("SELECT id FROM projects")
+    cursor.execute("SELECT id, state_json FROM projects")
     rows = cursor.fetchall()
     conn.close()
-    
-    target_project_id = None
-    state = None
-    for row in rows:
-        proj_id = row[0]
-        s = get_project_state("data/rerun.db", proj_id)
-        if s and s.pending and s.pending.get("id") == approval_id:
-            target_project_id = proj_id
-            state = s
-            break
-            
+
+    for proj_id, state_json in rows:
+        if not state_json:
+            continue
+        try:
+            pending = json.loads(state_json).get("pending")
+        except Exception:
+            continue
+        if isinstance(pending, dict) and pending.get("id") == pending_id:
+            return proj_id
+    return None
+
+@router.post("/api/approvals/{approval_id}")
+def process_approval(approval_id: str, req: ApprovalRequest):
+    # Locate the owning project without validating unrelated rows
+    target_project_id = _find_project_by_pending_id(approval_id)
     if not target_project_id:
+        raise HTTPException(status_code=404, detail="Approval not found")
+
+    state = get_project_state("data/rerun.db", target_project_id)
+    if not state or not state.pending or state.pending.get("id") != approval_id:
         raise HTTPException(status_code=404, detail="Approval not found")
         
     # Idempotent: check if already approved

@@ -7,7 +7,8 @@ Phase  = Literal["INGEST","ANALYZE","CLAIMS_CONFIRM","PLAN","PREFLIGHT","SETUP",
                  "APPROVAL","PATCH_APPLY","STATUS","REPORT","REPORT_REVIEW","DONE"]
 ErrorClass = Literal["dependency_missing","dependency_conflict","path_error","gpu_required","network_required",
                      "resource_oom","resource_timeout","sandbox_permission","config_error","numerical_invalid",
-                     "config_mismatch","python_version_mismatch","api_deprecation","dataset_missing","device_unavailable","unknown"]
+                     "config_mismatch","python_version_mismatch","api_deprecation","dataset_missing","device_unavailable",
+                     "metric_extraction_failed","unknown"]
 RiskClass = Literal["environment_fix","bug_fix","config_alignment","deviation"]
 
 class Tolerance(BaseModel):

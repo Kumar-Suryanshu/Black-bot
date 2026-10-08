@@ -1,11 +1,25 @@
 import sqlite3
 import json
+import logging
 import os
 from typing import Optional, List, Dict, Any
+
+logger = logging.getLogger(__name__)
 
 class ConcurrentModificationError(Exception):
     """Raised when an optimistic locking version mismatch occurs."""
     pass
+
+class CorruptProjectStateError(Exception):
+    """
+    Raised when a project's persisted state_json cannot be validated back into a
+    ProjectState. Callers should surface this as a per-project error (422), never as a
+    generic server failure, so one unreadable row cannot look like a server outage.
+    """
+    def __init__(self, project_id: str, detail: str):
+        self.project_id = project_id
+        self.detail = detail
+        super().__init__(f"Corrupt persisted state for project '{project_id}': {detail}")
 
 def get_connection(db_path="data/rerun.db"):
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
@@ -67,6 +81,58 @@ def init_db(db_path="data/rerun.db"):
     ''')
     conn.commit()
     conn.close()
+    repair_unknown_error_classes(db_path)
+
+def repair_unknown_error_classes(db_path: str = "data/rerun.db") -> int:
+    """
+    Idempotent repair for rows written before an attempt error_class value was added to the
+    ErrorClass literal. Any attempt carrying an error_class outside the current literal is
+    rewritten to "unknown" so the row can be loaded again. Returns the number of rows repaired.
+    """
+    from typing import get_args
+    from agent.state import ErrorClass
+
+    allowed = set(get_args(ErrorClass))
+    repaired = 0
+    try:
+        conn = get_connection(db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, state_json FROM projects")
+        rows = cursor.fetchall()
+        for project_id, state_json in rows:
+            if not state_json:
+                continue
+            try:
+                data = json.loads(state_json)
+            except Exception:
+                continue
+            attempts = data.get("attempts")
+            if not isinstance(attempts, list):
+                continue
+            changed = False
+            for att in attempts:
+                if not isinstance(att, dict):
+                    continue
+                ec = att.get("error_class")
+                if ec is not None and ec not in allowed:
+                    logger.warning(
+                        "Repairing project %s: attempt error_class %r is not a valid ErrorClass; "
+                        "rewriting to 'unknown'", project_id, ec
+                    )
+                    att["error_class"] = "unknown"
+                    changed = True
+            if changed:
+                cursor.execute(
+                    "UPDATE projects SET state_json = ? WHERE id = ?",
+                    (json.dumps(data), project_id)
+                )
+                repaired += 1
+        if repaired:
+            conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.warning("error_class repair migration skipped: %s", e)
+    return repaired
 
 def save_project_state(db_path, project_id, benchmark_id, commit_sha, status, state_model, expected_version: Optional[int] = None):
     conn = get_connection(db_path)
@@ -129,8 +195,17 @@ def get_project_state(db_path, project_id):
     row = cursor.fetchone()
     conn.close()
     if row:
+        from pydantic import ValidationError
         from agent.state import ProjectState
-        state = ProjectState.model_validate_json(row[0])
+        try:
+            state = ProjectState.model_validate_json(row[0])
+        except ValidationError as e:
+            detail = "; ".join(
+                f"{'.'.join(str(p) for p in err.get('loc', ()))}: {err.get('msg', '')}"
+                for err in e.errors()[:5]
+            )
+            logger.error("Corrupt persisted state for project %s: %s", project_id, detail)
+            raise CorruptProjectStateError(project_id, detail) from e
         if has_version and row[1] is not None:
             state.version = row[1]
         return state

@@ -2,10 +2,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from backend.app.routes import router
-from backend.app.db import init_db
+from backend.app.db import init_db, CorruptProjectStateError
 
 def startup_event():
     import os
@@ -29,5 +30,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.exception_handler(CorruptProjectStateError)
+async def corrupt_project_state_handler(request: Request, exc: CorruptProjectStateError):
+    """
+    One unreadable project row must not look like a server outage. Report it as a specific,
+    per-project 422 naming the project and the offending field.
+    """
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": (
+                f"Project '{exc.project_id}' has a persisted state that can no longer be read "
+                f"({exc.detail}). Other projects are unaffected."
+            ),
+            "project_id": exc.project_id,
+            "error": "corrupt_project_state",
+        },
+    )
 
 app.include_router(router)
