@@ -1,9 +1,44 @@
 import threading
 import logging
+from typing import Optional, Dict
 from agent.loop import run_project
 from backend.app.db import get_project_state, save_project_state
+from sandbox.manager import kill_project_containers
 
 logger = logging.getLogger(__name__)
+
+_RUNNING_WORKERS: Dict[str, threading.Thread] = {}
+_RUNNING_WORKERS_LOCK = threading.Lock()
+
+def is_worker_running(project_id: str) -> bool:
+    """Check if a background worker thread is actively running for the given project."""
+    with _RUNNING_WORKERS_LOCK:
+        t = _RUNNING_WORKERS.get(project_id)
+        return t is not None and t.is_alive()
+
+def stop_project_worker(project_id: str):
+    """Signals worker to stop and kills associated containers."""
+    # 1. Update state abort flag if found
+    try:
+        state = get_project_state("data/rerun.db", project_id)
+        if state:
+            state.abort_requested = True
+            save_project_state("data/rerun.db", project_id, state.benchmark_id, state.repo_commit, "DONE", state)
+    except Exception as e:
+        logger.warning(f"Failed to set abort flag for project {project_id}: {e}")
+
+    # 2. Kill containers
+    try:
+        import sandbox.manager
+        sandbox.manager.kill_project_containers(project_id)
+    except Exception as e:
+        logger.warning(f"Failed to kill containers for project {project_id}: {e}")
+
+    # 3. Wait on worker thread if needed
+    with _RUNNING_WORKERS_LOCK:
+        t = _RUNNING_WORKERS.get(project_id)
+    if t and t.is_alive() and t != threading.current_thread():
+        t.join(timeout=2.0)
 
 def run_project_thread(project_id: str):
     """
@@ -16,6 +51,10 @@ def run_project_thread(project_id: str):
         logger.error(f"Project {project_id} not found.")
         return
         
+    if getattr(state, "abort_requested", False) or state.phase == "DONE":
+        logger.info(f"Project {project_id} is already aborted or DONE. Worker exiting.")
+        return
+
     try:
         run_project(state, deps={})
     except Exception as e:
@@ -23,14 +62,30 @@ def run_project_thread(project_id: str):
         state.phase = "DONE"
         state.final = {"status": "INCONCLUSIVE", "reason": f"internal error: {str(e)}"}
         
-    # Save state back after loop returns
-    # The status column is updated for convenience
+    # Save final state back after loop returns
     status = state.final.get("status") if state.final else state.phase
     save_project_state("data/rerun.db", project_id, state.benchmark_id, state.repo_commit, status, state)
     logger.info(f"Worker for project {project_id} finished. Phase: {state.phase}, Pending: {state.pending}")
 
-def start_project_worker(project_id: str):
-    """Starts the synchronous orchestrator in a background thread."""
-    t = threading.Thread(target=run_project_thread, args=(project_id,), daemon=True)
-    t.start()
+def start_project_worker(project_id: str) -> bool:
+    """
+    Starts the synchronous orchestrator in a background thread.
+    Returns True if a new worker thread was started, or False if one was already running (preventing duplicate workers).
+    """
+    with _RUNNING_WORKERS_LOCK:
+        t = _RUNNING_WORKERS.get(project_id)
+        if t is not None and t.is_alive():
+            logger.warning(f"Worker for project {project_id} is already running. Duplicate start ignored.")
+            return False
 
+        def worker():
+            try:
+                run_project_thread(project_id)
+            finally:
+                with _RUNNING_WORKERS_LOCK:
+                    _RUNNING_WORKERS.pop(project_id, None)
+
+        thread = threading.Thread(target=worker, daemon=True, name=f"worker_{project_id}")
+        _RUNNING_WORKERS[project_id] = thread
+        thread.start()
+        return True

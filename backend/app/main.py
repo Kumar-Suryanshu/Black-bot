@@ -1,12 +1,25 @@
 from dotenv import load_dotenv
 load_dotenv()
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from backend.app.routes import router
 from backend.app.db import init_db
 
-app = FastAPI(title="Rerun API")
+def startup_event():
+    import os
+    sandbox_type = os.getenv("SANDBOX_TYPE", "docker")
+    if sandbox_type == "fake" and os.getenv("ALLOW_FAKE_SANDBOX") != "1":
+        raise RuntimeError("Refusing to start API with SANDBOX_TYPE=fake without ALLOW_FAKE_SANDBOX=1.")
+    init_db()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    startup_event()
+    yield
+
+app = FastAPI(title="Rerun API", lifespan=lifespan)
 
 # Allow Vite dev server
 app.add_middleware(
@@ -18,12 +31,3 @@ app.add_middleware(
 )
 
 app.include_router(router)
-
-@app.on_event("startup")
-def startup_event():
-    import os
-    sandbox_type = os.getenv("SANDBOX_TYPE", "docker")
-    if sandbox_type == "fake" and os.getenv("ALLOW_FAKE_SANDBOX") != "1":
-        raise RuntimeError("Refusing to start API with SANDBOX_TYPE=fake without ALLOW_FAKE_SANDBOX=1.")
-    init_db()
-

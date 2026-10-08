@@ -19,6 +19,43 @@ class RunResult:
     duration_s: float
     output_dir: str
 
+_ACTIVE_CONTAINERS: dict[str, str] = {}
+_ACTIVE_CONTAINERS_LOCK = threading.Lock()
+
+def kill_project_containers(project_id: str):
+    """Kills and removes all running containers associated with a project ID."""
+    try:
+        client = docker.from_env()
+        # 1. Kill by label
+        try:
+            labeled = client.containers.list(all=True, filters={"label": f"rerun_project={project_id}"})
+            for c in labeled:
+                try:
+                    c.kill()
+                except Exception:
+                    pass
+                try:
+                    c.remove(force=True)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # 2. Kill by tracked id
+        with _ACTIVE_CONTAINERS_LOCK:
+            cid = _ACTIVE_CONTAINERS.get(project_id)
+        if cid:
+            try:
+                c = client.containers.get(cid)
+                c.kill()
+            except Exception:
+                pass
+            try:
+                c.remove(force=True)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
 def probe_gpu() -> dict:
     """Check if the Docker daemon lists an nvidia runtime and can run a test container."""
     if sys.platform == "darwin":
@@ -120,7 +157,17 @@ def run_container(project_id: str, workspace: Path, is_setup: bool, command: str
 
     # 2. Build spec and run
     spec = build_container_spec(project_id, workspace, is_setup, command)
+    container_name = f"rerun_{project_id}_{kind}_{n}"
+    try:
+        existing = client.containers.get(container_name)
+        existing.remove(force=True)
+    except Exception:
+        pass
+    spec["name"] = container_name
+    
     container = client.containers.run(**spec)
+    with _ACTIVE_CONTAINERS_LOCK:
+        _ACTIVE_CONTAINERS[project_id] = container.id
     
     start_time = time.time()
     
@@ -184,6 +231,9 @@ def run_container(project_id: str, workspace: Path, is_setup: bool, command: str
         container.remove(force=True)
     except docker.errors.NotFound:
         pass
+    finally:
+        with _ACTIVE_CONTAINERS_LOCK:
+            _ACTIVE_CONTAINERS.pop(project_id, None)
         
     return RunResult(
         exit_code=exit_code,

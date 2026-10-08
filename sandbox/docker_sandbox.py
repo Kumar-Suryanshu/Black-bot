@@ -1,10 +1,14 @@
 from pathlib import Path
 from typing import Tuple, Optional
 from agent.state import ProjectState
-from sandbox.manager import run_container, RunResult
+from sandbox.manager import run_container, RunResult, kill_project_containers
 
 class DockerSandbox:
     """Real Docker sandbox adapter implementing the orchestrator execution interface."""
+
+    def kill(self, project_id: str):
+        """Immediately kill any running containers for this project."""
+        kill_project_containers(project_id)
 
     def execute(self, state: ProjectState, workspace: str, command: str, kind: str, n: int) -> RunResult:
         """Run an experiment execution container (isolated, offline, CPU/mem/PID capped)."""

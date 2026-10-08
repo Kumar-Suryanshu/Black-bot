@@ -14,7 +14,13 @@ from backend.app.models import (
     ClaimsConfirmRequest, ApprovalRequest, HealthResponse
 )
 from backend.app.db import get_connection, get_project_state, save_project_state
-from backend.app.runner import start_project_worker
+import backend.app.runner as runner
+
+def start_project_worker(project_id: str) -> bool:
+    return runner.start_project_worker(project_id)
+
+def stop_project_worker(project_id: str):
+    return runner.stop_project_worker(project_id)
 from backend.app.sse import stream_manager
 from agent.state import ProjectState, Approval
 
@@ -320,10 +326,13 @@ def run_project_triage(id: str):
     return report
 
 @router.get("/api/projects/{id}/events")
-def stream_events(id: str, request: Request, last_event_id: Optional[str] = Header(default="0")):
+def stream_events(id: str, request: Request, last_event_id: Optional[str] = Header(default=None)):
+    query_last_id = request.query_params.get("last_event_id") or request.query_params.get("last_id")
+    header_last_id = last_event_id or request.headers.get("last-event-id")
+    raw_id = query_last_id or header_last_id or "0"
     try:
-        last_id = int(last_event_id)
-    except ValueError:
+        last_id = int(raw_id)
+    except (ValueError, TypeError):
         last_id = 0
     return StreamingResponse(stream_manager.event_generator(id, last_id), media_type="text/event-stream")
 
@@ -373,14 +382,85 @@ def process_approval(approval_id: str, req: ApprovalRequest):
     if any(a.id == approval_id for a in state.approvals):
         return {"status": "already_processed"}
         
-    # Validation per spec: if requires_extra_confirm and not confirmed
     patch_id = state.pending.get("patch_id")
     patch = next((p for p in state.patches if p.id == patch_id), None)
-    # The banner or critic review might dictate requires_extra_confirm. 
-    # The spec says: approve on a packet with requires_extra_confirm and confirm_extra?false -> 400.
+    if not patch:
+        raise HTTPException(status_code=404, detail="Patch not found")
+
     if state.pending.get("banner") and req.decision == "approve" and not req.confirm_extra:
         raise HTTPException(status_code=400, detail="Extra confirmation required due to banner")
+
+    # Handle decision == "edit" (D14)
+    if req.decision == "edit":
+        if not req.edits:
+            raise HTTPException(status_code=400, detail="Edits required when decision is 'edit'")
+            
+        from agent.state import Edit
+        from tools.policy import check as check_policy, compute_fix_signature
+        from tools.patch import apply_edits_in_memory, make_diff
+        from agent.critic.review import review_patch
         
+        parsed_edits = []
+        for ed in req.edits:
+            if isinstance(ed, dict):
+                parsed_edits.append(Edit(**ed))
+            elif isinstance(ed, Edit):
+                parsed_edits.append(ed)
+            else:
+                raise HTTPException(status_code=400, detail="Invalid edit format")
+
+        ws = state.workspace or f"data/runs/{target_project_id}/workspace"
+        candidate_patch = patch.model_copy(deep=True)
+        candidate_patch.edits = parsed_edits
+
+        # Recompute diff
+        for ed in parsed_edits:
+            target_f = os.path.join(ws, ed.file)
+            if not os.path.exists(target_f):
+                raise HTTPException(status_code=400, detail=f"Target file {ed.file} does not exist")
+
+        try:
+            new_contents = apply_edits_in_memory(ws, parsed_edits)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to apply edits: {str(e)}")
+
+        candidate_patch.diff = make_diff(ws, new_contents)
+
+        # Re-run Policy Check
+        pol_res = check_policy(state, candidate_patch, ws)
+        if not pol_res.get("passed", False):
+            raise HTTPException(status_code=400, detail=f"Edited patch failed policy: {pol_res.get('violations', [])}")
+
+        # Re-run Critic Review
+        critic_rev = review_patch(state, candidate_patch)
+        state.critic_reviews.append(critic_rev)
+
+        # Apply candidate updates to actual patch
+        patch.edits = parsed_edits
+        patch.diff = candidate_patch.diff
+        patch.policy_result = pol_res
+        patch.fix_signature = compute_fix_signature(parsed_edits[0].file, parsed_edits[0].op, parsed_edits[0].new) if parsed_edits else None
+        patch.critic_status = critic_rev.verdict.lower() if hasattr(critic_rev, 'verdict') else 'pending'
+        patch.status = "approved"
+
+        appr = Approval(
+            id=approval_id,
+            patch_id=patch_id,
+            decision="edit",
+            by="user",
+            at=datetime.datetime.now().isoformat(),
+            comment=req.comment or "Operator edited patch",
+            over_critic_objection=(critic_rev.verdict == "BLOCK")
+        )
+        patch.approval = appr.id
+        state.approvals.append(appr)
+        state.pending = None
+        state.phase = "PATCH_APPLY"
+
+        save_project_state("data/rerun.db", target_project_id, state.benchmark_id, state.repo_commit, state.phase, state)
+        start_project_worker(target_project_id)
+        return {"status": "applied_and_approved", "patch": patch.model_dump()}
+
     appr = Approval(
         id=approval_id,
         patch_id=patch_id,
@@ -392,34 +472,51 @@ def process_approval(approval_id: str, req: ApprovalRequest):
     )
     
     state.approvals.append(appr)
-    # Let run_project clear pending, or we clear it here? 
-    # Wait, the spec says handler checks matching_app. We can leave state.pending.
-    # Actually, the orchestrator clears state.pending in handle_approval! 
-    
     save_project_state("data/rerun.db", target_project_id, state.benchmark_id, state.repo_commit, state.phase, state)
-    
-    # Resume
     start_project_worker(target_project_id)
     return {"status": "processed"}
+
+@router.get("/api/projects/{id}/evidence")
+def list_evidence(id: str):
+    state = get_project_state("data/rerun.db", id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Project not found")
+    from backend.app.db import get_all_evidence
+    items = get_all_evidence("data/rerun.db", id)
+    if items:
+        return items
+    ledger_path = f"data/runs/{id}/evidence.json"
+    if os.path.exists(ledger_path):
+        try:
+            with open(ledger_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return []
 
 @router.get("/api/projects/{id}/evidence/{eid}")
 def get_evidence(id: str, eid: str):
     state = get_project_state("data/rerun.db", id)
     if not state:
         raise HTTPException(status_code=404, detail="Project not found")
-    # Evidence could be in SQLite or in state.evidence_ids. Actually, evidence objects are stored in the `evidence` table or ledger?
-    # Stage 2 created `tools/evidence.py`. It probably saves to a local ledger file.
-    import json
+    from backend.app.db import get_evidence_by_id
+    item = get_evidence_by_id("data/rerun.db", id, eid)
+    if item:
+        return item
     ledger_path = f"data/runs/{id}/evidence.json"
     if os.path.exists(ledger_path):
-        with open(ledger_path) as f:
-            ledger = json.load(f)
-            for item in ledger:
-                if item.get("id") == eid:
-                    return item
+        try:
+            with open(ledger_path, "r", encoding="utf-8") as f:
+                ledger = json.load(f)
+                for it in ledger:
+                    if it.get("id") == eid:
+                        return it
+        except Exception:
+            pass
     raise HTTPException(status_code=404, detail="Evidence not found")
 
 @router.get("/api/projects/{id}/runs/{n}/log")
+@router.get("/api/projects/{id}/logs/{n}")
 def get_run_log(id: str, n: int, tail: Optional[int] = None):
     log_path = f"data/runs/{id}/logs/run_{n}.log"
     if not os.path.exists(log_path):
@@ -436,11 +533,9 @@ def get_report(id: str):
     if not state:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # If already generated during handle_report, return it
     if state.final and "report" in state.final and state.final["report"]:
         return state.final["report"]
 
-    # Generate deterministically from current state
     rep = generate_report(state)
     if state.final is None:
         state.final = {}
@@ -473,6 +568,13 @@ def abort_project(id: str):
     state = get_project_state("data/rerun.db", id)
     if not state:
         raise HTTPException(status_code=404, detail="Project not found")
+    try:
+        import sandbox.manager
+        sandbox.manager.kill_project_containers(id)
+    except Exception:
+        pass
+    stop_project_worker(id)
+    state.abort_requested = True
     state.phase = "DONE"
     state.final = {"status": "INCONCLUSIVE", "reason": "aborted by user", "after_n_fixes": len(state.patches)}
     state.pending = None

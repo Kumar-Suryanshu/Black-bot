@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import shutil
 import datetime
@@ -46,6 +47,38 @@ def record_evidence(project_state, type_, source_path, line_start, line_end, too
     )
     
     project_state.evidence_ids.append(ev_id)
+    
+    # 1. Persist to ledger file data/runs/<project_id>/evidence.json (D12)
+    ledger_path = os.path.join(data_dir, "runs", project_state.project_id, "evidence.json")
+    ledger = []
+    if os.path.exists(ledger_path):
+        try:
+            with open(ledger_path, "r", encoding="utf-8") as f:
+                ledger = json.load(f)
+        except Exception:
+            ledger = []
+    ledger.append(ev.model_dump())
+    try:
+        with open(ledger_path, "w", encoding="utf-8") as f:
+            json.dump(ledger, f, indent=2)
+    except Exception:
+        pass
+        
+    # 2. Persist to SQLite evidence table (D12)
+    try:
+        from backend.app.db import insert_evidence
+        db_path = os.path.join(data_dir, "rerun.db")
+        insert_evidence(db_path, ev.model_dump(), project_state.project_id)
+    except Exception:
+        pass
+
+    try:
+        if data_dir != "data":
+            from backend.app.db import insert_evidence
+            insert_evidence("data/rerun.db", ev.model_dump(), project_state.project_id)
+    except Exception:
+        pass
+
     return ev
 
 def verify_quote(evidence_record, quote):

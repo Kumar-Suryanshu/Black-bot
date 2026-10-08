@@ -97,7 +97,9 @@ def guard_budgets(state: ProjectState) -> bool:
 
 def handle_ingest(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
-    ws_path = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
+    ws_path = state.workspace or deps.get("workspace", f"data/runs/{state.project_id}/workspace")
+    state.workspace = ws_path
+    deps["workspace"] = ws_path
     os.makedirs(ws_path, exist_ok=True)
 
     if state.source == "custom":
@@ -253,6 +255,7 @@ def handle_setup(state: ProjectState, deps: dict):
         exit_code, log_path, res = sb.install(state, ws, len(state.attempts) + 1)
         if log_path:
             deps["latest_log_path"] = log_path
+            state.latest_log_path = log_path
         if exit_code != 0:
             emit_event(state, "system", "setup_failed", f"Setup dependency install failed with exit code {exit_code}")
             att = Attempt(
@@ -299,6 +302,7 @@ def handle_run(state: ProjectState, deps: dict):
         timed_out = False
         oom = False
     deps["latest_log_path"] = log_path
+    state.latest_log_path = log_path
     
     att = Attempt(
         n=n,
@@ -378,6 +382,7 @@ def handle_compare(state: ProjectState, deps: dict):
         state.phase = "STATUS"
     else:
         deps["silent_divergence"] = True
+        state.silent_divergence = True
         state.phase = "DIAGNOSE"
 
 def handle_diagnose(state: ProjectState, deps: dict):
@@ -656,7 +661,7 @@ def handle_approval(state: ProjectState, deps: dict):
         return
         
     state.pending = None
-    if matching_app.decision == "approve":
+    if matching_app.decision in ("approve", "edit"):
         state.phase = "PATCH_APPLY"
     else:
         patch.status = "rejected"
@@ -687,6 +692,7 @@ def handle_patch_apply(state: ProjectState, deps: dict):
             install_exit, install_log, install_res = sb.install(state, ws, len(state.attempts) + 1)
             if install_log:
                 deps["latest_log_path"] = install_log
+                state.latest_log_path = install_log
             if install_exit != 0:
                 emit_event(state, "system", "install_failed", f"Install failed with exit code {install_exit}")
                 att = Attempt(
@@ -797,11 +803,42 @@ def run_project(state: ProjectState, deps: Optional[dict] = None):
     """
     Main orchestrator execution loop (§7.2).
     Transitions through phases until DONE or paused for a human.
+    Persists state after each step (D16) and supports clean abort / resumption.
     """
+    from backend.app.db import save_project_state
     deps_dict = deps or {}
+
+    # Restore runtime context from state if not present in deps
+    if state.workspace:
+        deps_dict.setdefault("workspace", state.workspace)
+    else:
+        state.workspace = deps_dict.get("workspace", f"data/runs/{state.project_id}/workspace")
+        deps_dict["workspace"] = state.workspace
+        
+    if state.latest_log_path and "latest_log_path" not in deps_dict:
+        deps_dict["latest_log_path"] = state.latest_log_path
+    if state.silent_divergence:
+        deps_dict["silent_divergence"] = True
+
     while state.phase != "DONE":
+        if getattr(state, "abort_requested", False):
+            state.phase = "DONE"
+            if not state.final:
+                state.final = {"status": "INCONCLUSIVE", "reason": "aborted by user", "after_n_fixes": len(state.patches)}
+            try:
+                save_project_state("data/rerun.db", state.project_id, state.benchmark_id, state.repo_commit, "DONE", state)
+            except Exception:
+                pass
+            return
+
         if guard_budgets(state):
+            try:
+                status = state.final.get("status") if state.final else state.phase
+                save_project_state("data/rerun.db", state.project_id, state.benchmark_id, state.repo_commit, status, state)
+            except Exception:
+                pass
             continue
+
         handler = PHASE_HANDLERS.get(state.phase)
         if not handler:
             break
@@ -811,5 +848,32 @@ def run_project(state: ProjectState, deps: Optional[dict] = None):
             handler(state, deps_dict)
         finally:
             key_rotator.end_task()
+
+        # Sync runtime fields back to state
+        if "workspace" in deps_dict:
+            state.workspace = deps_dict["workspace"]
+        if "latest_log_path" in deps_dict:
+            state.latest_log_path = deps_dict["latest_log_path"]
+        if deps_dict.get("silent_divergence"):
+            state.silent_divergence = True
+
+        # Check abort requested mid-step
+        if getattr(state, "abort_requested", False):
+            state.phase = "DONE"
+            if not state.final:
+                state.final = {"status": "INCONCLUSIVE", "reason": "aborted by user", "after_n_fixes": len(state.patches)}
+            try:
+                save_project_state("data/rerun.db", state.project_id, state.benchmark_id, state.repo_commit, "DONE", state)
+            except Exception:
+                pass
+            return
+
+        # Per-step persistence (D16)
+        try:
+            status = state.final.get("status") if state.final else state.phase
+            save_project_state("data/rerun.db", state.project_id, state.benchmark_id, state.repo_commit, status, state)
+        except Exception:
+            pass
+
         if state.pending:
             return  # Paused for human approval or claim confirmation
