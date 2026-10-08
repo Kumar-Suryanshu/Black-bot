@@ -172,3 +172,76 @@ def test_log_route_does_not_serve_a_different_attempts_log():
         assert "SECOND ATTEMPT" not in body["log"]
     finally:
         client.delete(f"/api/projects/{project_id}")
+
+
+# ---------------------------------------------------------------------------
+# handle_approval patch resolution (regression)
+#
+# Resolving the patch strictly from state.pending broke every caller that clears `pending`
+# as it records the decision -- notably scripts/run_case.py. The run then logged
+# "APPROVAL phase has no patch matching pending patch_id None", fell through to DIAGNOSE and
+# finished UNABLE_TO_EXECUTE with the patch never applied.
+#
+# The fake sandbox cannot catch this: FakeSandbox always exits 0, so b2_dependency never
+# reaches the patch path there. It was found by running the case in a real container.
+# ---------------------------------------------------------------------------
+
+import datetime
+
+import agent.loop as loop
+
+
+def _approval_state(pending):
+    state = ProjectState(
+        project_id="P-APPROVAL-RESOLVE", benchmark_id="b2_dependency", repo_commit="c1",
+        phase="APPROVAL", budgets={"steps_used": 1}, claims=[], paper_settings=[],
+        repo_profile={},
+    )
+    state.patches = [PatchProposal(
+        id="P-1", hypothesis_id="H-1", type="dependency",
+        rationale="ModuleNotFoundError: No module named 'yaml'",
+        evidence=["E-001"], alternatives_considered=[],
+        edits=[Edit(file="requirements.txt", op="append_line", new="PyYAML==6.0.1")],
+    )]
+    state.approvals = [Approval(
+        id="A-1", patch_id="P-1", decision="approve", by="headless_approver",
+        at=datetime.datetime.now().isoformat(),
+    )]
+    state.pending = pending
+    return state
+
+
+def test_approval_proceeds_when_pending_names_the_patch():
+    state = _approval_state({"kind": "approval", "id": "A-1", "patch_id": "P-1", "banner": None})
+    loop.handle_approval(state, {})
+    assert state.phase == "PATCH_APPLY"
+
+
+def test_approval_proceeds_when_the_caller_already_cleared_pending():
+    """The headless runner clears pending before re-entering run_project."""
+    state = _approval_state(None)
+    loop.handle_approval(state, {})
+    assert state.phase == "PATCH_APPLY", (
+        "approval stalled because pending was cleared; the patch is never applied"
+    )
+
+
+def test_approval_prefers_the_patch_named_by_pending_over_the_newest():
+    """When pending names a patch, an unrelated newer patch must not be acted on."""
+    state = _approval_state({"kind": "approval", "id": "A-1", "patch_id": "P-1", "banner": None})
+    state.patches.append(PatchProposal(
+        id="P-2", hypothesis_id="H-2", type="config_value", rationale="unrelated later patch",
+        evidence=["E-002"], alternatives_considered=[],
+        edits=[Edit(file="configs/default.yaml", op="replace_text", old="a: 1", new="a: 2")],
+    ))
+    loop.handle_approval(state, {})
+    # P-1 is the approved one, so the run advances; P-2 must be untouched.
+    assert state.phase == "PATCH_APPLY"
+    assert state.patches[1].status == "proposed"
+
+
+def test_approval_with_no_candidate_patch_does_not_stall():
+    state = _approval_state(None)
+    state.patches = []
+    loop.handle_approval(state, {})
+    assert state.phase == "DIAGNOSE"

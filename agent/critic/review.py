@@ -3,6 +3,7 @@ from pathlib import Path
 
 from agent.state import ProjectState, PatchProposal, CriticReview
 from agent.llm import call as default_llm_call
+from tools.evidence import load_evidence_artifact
 from .schemas import CriticJudgement
 from .prompts import CRITIC_PATCH_REVIEW_PROMPT
 
@@ -41,19 +42,11 @@ def build_review_packet(state: ProjectState, patch: PatchProposal, workspace: Op
     """Constructs the raw review packet for the Critic."""
     raw_evidence_slices = []
     for eid in patch.evidence:
-        # Look up artifact from state/disk
-        matching_snap = None
-        ev_dir = Path("data") / "runs" / state.project_id / "evidence"
-        if ev_dir.exists():
-            for f in ev_dir.iterdir():
-                if f.name.startswith(f"{eid}_"):
-                    try:
-                        matching_snap = f.read_text(encoding="utf-8", errors="ignore")[:2000]
-                    except Exception:
-                        pass
+        # Resolve through the ledger so the id maps to exactly one artifact.
+        text = load_evidence_artifact(state.project_id, eid)
         raw_evidence_slices.append({
             "id": eid,
-            "raw_text": matching_snap or "(evidence artifact not found on disk)"
+            "raw_text": text[:2000] if text else "(evidence artifact not found on disk)"
         })
 
     hypo_text = ""
@@ -126,23 +119,15 @@ def review_patch(
             model="unavailable"
         )
 
-    # Code-level verification of raw quotes in verified_evidence
-    ev_dir = Path("data") / "runs" / state.project_id / "evidence"
+    # Code-level verification of raw quotes in verified_evidence. The quote must appear in the
+    # one artifact the ledger records for that id, not in any file sharing the id prefix.
     for item in review.verified_evidence:
         eid = item.get("id")
         found_quote = item.get("what_i_found", "")
-        # Check against evidence file
-        matched = False
-        if ev_dir.exists():
-            for f in ev_dir.iterdir():
-                if f.name.startswith(f"{eid}_"):
-                    try:
-                        content = f.read_text(encoding="utf-8", errors="ignore")
-                        if found_quote.strip() in content:
-                            matched = True
-                    except Exception:
-                        pass
-        if not matched and found_quote:
+        if not found_quote:
+            continue
+        content = load_evidence_artifact(state.project_id, eid) or ""
+        if found_quote.strip() not in content:
             # Quote was not actually in the artifact!
             review.checks["evidence_actually_supports_cause"] = False
 

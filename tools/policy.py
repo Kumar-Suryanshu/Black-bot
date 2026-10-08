@@ -179,18 +179,14 @@ def check(state, proposal, workspace: str = None) -> Dict[str, Any]:
         if proposal.type == "code_api_compat" and f.endswith(".py"):
             target_base = Path(f).name
             has_traceback_prov = False
-            ev_dir = Path("data") / "runs" / getattr(state, "project_id", "") / "evidence"
             for eid in proposal.evidence:
-                if ev_dir.exists():
-                    for ev_file in ev_dir.iterdir():
-                        if ev_file.name.startswith(f"{eid}_"):
-                            try:
-                                ev_txt = ev_file.read_text(encoding="utf-8", errors="ignore")
-                                if target_base in ev_txt or "traceback" in ev_txt.lower() or "error" in ev_txt.lower():
-                                    has_traceback_prov = True
-                                    break
-                            except Exception:
-                                pass
+                # Resolve through the ledger: one evidence id, one artifact.
+                from tools.evidence import load_evidence_artifact
+                ev_txt = load_evidence_artifact(getattr(state, "project_id", ""), eid)
+                if ev_txt:
+                    if target_base in ev_txt or "traceback" in ev_txt.lower() or "error" in ev_txt.lower():
+                        has_traceback_prov = True
+                        break
                 if target_base in proposal.rationale and any(w in proposal.rationale.lower() for w in ["traceback", "error", "exception"]):
                     has_traceback_prov = True
                     break

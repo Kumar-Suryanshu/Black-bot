@@ -112,17 +112,15 @@ def verify_report_claims(
     current_status = state.final.get("status") if state.final else state.phase
     confirmed_hypo_ids = {h.id for h in state.hypotheses if h.status == "confirmed"}
 
-    # Pre-cache evidence text from disks
+    # Pre-cache evidence text, resolved through the ledger so each id maps to exactly one
+    # artifact rather than to any snapshot sharing its filename prefix.
+    from tools.evidence import load_evidence_artifact
+
     evidence_texts: Dict[str, str] = {}
-    ev_dir = Path("data") / "runs" / state.project_id / "evidence"
-    if ev_dir.exists():
-        for f in ev_dir.iterdir():
-            for eid in state.evidence_ids:
-                if f.name.startswith(f"{eid}_"):
-                    try:
-                        evidence_texts[eid] = f.read_text(encoding="utf-8", errors="ignore")
-                    except Exception:
-                        pass
+    for eid in state.evidence_ids:
+        text = load_evidence_artifact(state.project_id, eid)
+        if text is not None:
+            evidence_texts[eid] = text
 
     for stmt in statements:
         violations: List[str] = []

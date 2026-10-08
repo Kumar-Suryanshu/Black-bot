@@ -81,6 +81,63 @@ def record_evidence(project_state, type_, source_path, line_start, line_end, too
 
     return ev
 
+def load_evidence_artifact(project_id, eid, data_dir="data"):
+    """
+    Returns the text of the artifact the ledger records for EXACTLY this evidence id.
+
+    Callers used to locate artifacts with `f.name.startswith(f"{eid}_")`, but snapshots are
+    named `{eid}_{basename}`, ids restart at E-001 for every run, and the snapshot directory
+    is shared per project. One id therefore matched several unrelated files, so a quote could
+    be "verified" against a different artifact that merely shared the id prefix -- defeating
+    the hallucinated-quote check it exists to perform.
+
+    The ledger records the exact artifact_path per id, so resolve through it. Where an id
+    appears more than once (snapshots accumulated across runs), the most recent entry wins.
+    """
+    ledger_path = os.path.join(data_dir, "runs", project_id, "evidence.json")
+    artifact_path = None
+    if os.path.exists(ledger_path):
+        try:
+            with open(ledger_path, "r", encoding="utf-8") as f:
+                ledger = json.load(f)
+            for entry in reversed(ledger):
+                if isinstance(entry, dict) and entry.get("id") == eid:
+                    artifact_path = entry.get("artifact_path")
+                    break
+        except Exception:
+            artifact_path = None
+
+    if artifact_path and os.path.exists(artifact_path):
+        try:
+            with open(artifact_path, "r", encoding="utf-8", errors="ignore") as f:
+                return f.read()
+        except Exception:
+            return None
+
+    # No ledger entry for this id (hand-seeded fixtures, or a ledger that was not written).
+    # Fall back to the snapshot directory, but only accept an unambiguous single match:
+    # several files sharing the id prefix is exactly the ambiguity this function exists to
+    # remove, and guessing between them is what allowed a quote to be "verified" against the
+    # wrong artifact.
+    snapshot_dir = os.path.join(data_dir, "runs", project_id, "evidence")
+    if not os.path.isdir(snapshot_dir):
+        return None
+    try:
+        matches = [
+            os.path.join(snapshot_dir, name)
+            for name in sorted(os.listdir(snapshot_dir))
+            if name.startswith(f"{eid}_")
+        ]
+    except Exception:
+        return None
+    if len(matches) != 1:
+        return None
+    try:
+        with open(matches[0], "r", encoding="utf-8", errors="ignore") as f:
+            return f.read()
+    except Exception:
+        return None
+
 def verify_quote(evidence_record, quote):
     try:
         with open(evidence_record.artifact_path, "rb") as f:

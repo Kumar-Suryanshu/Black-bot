@@ -184,7 +184,16 @@ def get_fake_script_b2() -> list:
 
 
 def get_fake_script_b3() -> list:
-    """Script for B3 Silent Config Case: bad learning rate."""
+    """
+    Script for B3 Silent Config Case: bad learning rate.
+
+    Evidence ids matter here. Run 1 exits 0 with a low metric, so VALIDATE records the metric
+    source (outputs/results.json) as E-001 before DIAGNOSE inspects configs/default.yaml and
+    records it as E-002. Citing E-001 for the config quote therefore fails the Critic's
+    verbatim-quote check and the correct patch is rejected. b4's script already accounts for
+    this; b3's did not, which only showed up in a real container run because FakeSandbox
+    always exits 0 and never reaches this path.
+    """
     return [
         # 1. extract_claims
         ("solver", "extract_claims", {
@@ -232,7 +241,7 @@ def get_fake_script_b3() -> list:
                 "id": "H-1",
                 "text": "Learning rate mismatch",
                 "status": "confirmed",
-                "evidence": ["E-001"],
+                "evidence": ["E-002"],
                 "tested_with": ["inspect_file"],
                 "error_class": "config_mismatch"
             }],
@@ -246,7 +255,7 @@ def get_fake_script_b3() -> list:
             "hypothesis_id": "H-1",
             "type": "config_value",
             "rationale": "Paper specifies lr=0.5 but config uses 0.01",
-            "evidence": ["E-001"],
+            "evidence": ["E-002"],
             "alternatives_considered": [],
             "edits": [{
                 "file": "configs/default.yaml",
@@ -272,7 +281,7 @@ def get_fake_script_b3() -> list:
                 "alternative_explanations_considered": True,
                 "reversible_and_smoke_testable": True
             },
-            "verified_evidence": [{"id": "E-001", "what_i_found": "learning_rate: 0.01"}],
+            "verified_evidence": [{"id": "E-002", "what_i_found": "learning_rate: 0.01"}],
             "objections": [],
             "required_changes": [],
             "confidence": "high",
@@ -287,7 +296,7 @@ def get_fake_script_b3() -> list:
                     "kind": "finding",
                     "confidence": "confirmed",
                     "text": "Reproduction succeeded after applying 1 config patch.",
-                    "evidence": ["E-001"]
+                    "evidence": ["E-002"]
                 }
             ]
         })

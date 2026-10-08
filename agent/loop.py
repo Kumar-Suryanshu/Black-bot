@@ -834,12 +834,22 @@ def handle_critic_review(state: ProjectState, deps: dict):
 
 def handle_approval(state: ProjectState, deps: dict):
     # Resolve the patch the human was actually asked about, not merely the most recent one.
+    # `state.pending` is authoritative when present. Some callers (the headless runner, and
+    # the edit path in the API) clear `pending` as they record the decision, so fall back to
+    # the most recent patch still awaiting one rather than stalling.
     pending_patch_id = (state.pending or {}).get("patch_id")
-    patch = next((p for p in state.patches if p.id == pending_patch_id), None)
+    patch = None
+    if pending_patch_id:
+        patch = next((p for p in state.patches if p.id == pending_patch_id), None)
+    if patch is None:
+        patch = next(
+            (p for p in reversed(state.patches) if p.status in ("proposed", "approved")),
+            None
+        )
     if patch is None:
         emit_event(
             state, "system", "error",
-            f"APPROVAL phase has no patch matching pending patch_id {pending_patch_id!r}"
+            f"APPROVAL phase has no patch awaiting a decision (pending patch_id {pending_patch_id!r})"
         )
         state.pending = None
         state.phase = "DIAGNOSE"
