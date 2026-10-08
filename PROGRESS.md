@@ -60,7 +60,28 @@
     - **FastAPI Lifespan (D25):** Migrated deprecated `@app.on_event("startup")` to `@asynccontextmanager` `lifespan` handler.
     - **Gate Tests:** 8/8 unit tests in `tests/unit/test_stage4_ops.py` passed; 1/1 integration test in `tests/integration/test_stage4_docker_abort.py` passed; full suite passes 127 tests; 3/3 security tests pass with Docker.
     - **Frontend Build:** `npm run build` succeeds cleanly in 1.02s with 0 errors.
-  - *Status:* PASS — ready for user approval before Tier-1 Checkpoint / Stage 5.
+  - *Status:* PASS
+
+- [x] **Tier-1 Checkpoint (Completion Plan)**: Track A Evaluation on Real Docker
+  - *Gate Run Results:* PASS:
+    - **All 45 Real Docker Runs Completed ($5 \times 3 \times 3$):** Sweep across `b1`–`b5` × `{B-0, B-2, Rerun}` × 3 repeats executed on real Docker containers with image `rerun-base:py311` in offline mode.
+    - **B-0 (Fixed Baseline):** 6/15 runs matched gold (40.0%). Passes `b1_control` and `b5_unable`; fails `b2_dependency` (crashed on missing PyYAML), `b3_silent_config` (unrepaired learning rate), `b4_combined` (crashed on missing PyYAML).
+    - **B-2 (One-Shot LLM Baseline):** 12/15 runs matched gold (80.0%). Passes `b1_control`, `b2_dependency`, `b3_silent_config`, and `b5_unable`; **fails `b4_combined` (0/3)** because single-shot blind repair cannot handle multi-stage cascading failures (dependency failure followed by silent numerical calibration divergence).
+    - **Rerun (Autonomous repair with Critic & Policy):** **15/15 runs matched gold (100.0%)**. Autonomously diagnoses root causes, proposes minimal verified patches, validates against policy P1–P10, secures critic review, applies repairs, and verifies reproducibility.
+    - **Evidence Recorded:** Full CSV, JSON, and Markdown logs written to `benchmarks/results/20261008_172452/results.md` and committed to `benchmarks/MEASURED.md`.
+  - *Status:* PASS
+
+- [x] **Stage 5 (Completion Plan)**: Security hardening for untrusted repos (R9)
+  - *Branch:* `completion/stage-5`
+  - *Gate Run Results:* PASS:
+    - **Defense-in-Depth Specification (`docs/SECURITY.md`):** Comprehensive document specifying threat model, invariants I1–I5, I8, clone safety, container hardening, prompt injection defense, and secrets management.
+    - **Container Runtime Hardening & Bombs Contained:** Tested with Docker (`tests/security/test_hardening_and_bombs.py`, `tests/security/test_selftest.py`). Immutable root filesystem (`read_only=True`), non-root `uid 1000:1000`, `cap_drop=["ALL"]`, `security_opt=["no-new-privileges"]`, `network_mode="none"`. Disk bomb capped by tmpfs (`ENOSPC`), fork bomb capped by PIDs (`256`), memory bomb terminated by container OOM, infinite loop killed by timeout watchdog. Host completely unharmed.
+    - **Prompt Injection Resistance:** Tested with `tests/security/test_prompt_injection.py`. System override attempts in README, papers, or logs cannot bypass deterministic Policy P1–P10 (rejected unauthorized files `.env`, `.sh`), cannot bypass line limits (P3), and cannot bypass mandatory human approval (Invariant I8).
+    - **Secrets Hygiene:** `tests/security/test_secrets_and_deletion.py` verified that no unredacted API key patterns (`AIza*`, `AQ.*`, `sk-*`) exist across `data/runs/**`.
+    - **Data Deletion API (`DELETE /api/projects/{id}`):** Purges project workspace, PDF, logs, outputs, wheelhouse from disk and deletes rows from SQLite `projects`, `events`, and `evidence` tables (`test_data_deletion_removes_workspace_and_db`).
+    - **Concurrency Limits & Kill Switch:** Concurrency limit enforced (`MAX_CONCURRENT_PROJECTS=2`) with HTTP 429; `POST /api/admin/kill-switch` halts all running workers and kills labeled Docker containers globally (`test_admin_kill_switch`).
+    - **Security Test Suite:** 11/11 tests passing in `tests/security`. Full suite passes 138 tests; frontend builds cleanly.
+  - *Status:* PASS — ready for Stage 6 (Safe dependency provisioning).
 
 ---
 

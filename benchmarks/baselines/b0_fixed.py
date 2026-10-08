@@ -31,6 +31,12 @@ def run_b0(case_id, case_info, run_n=1):
         raise RuntimeError("Could not find target number in paper")
     target_mean = float(match.group(1))
     
+    # Generic planner preflight check: check if repo feasibility blocks execution (e.g. NEEDS_GPU)
+    from tools.triage import triage_report
+    triage = triage_report(str(workspace))
+    if triage.get("verdict") == "NEEDS_GPU" or "gpu_required" in triage.get("blockers", []):
+        return "UNABLE_TO_EXECUTE"
+    
     setup_res = run_container(
         project_id=f"b0_{case_id}_{run_n}",
         workspace=workspace,

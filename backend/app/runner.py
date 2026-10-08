@@ -5,7 +5,11 @@ from agent.loop import run_project
 from backend.app.db import get_project_state, save_project_state
 from sandbox.manager import kill_project_containers
 
+import os
+
 logger = logging.getLogger(__name__)
+
+MAX_CONCURRENT_PROJECTS = int(os.getenv("MAX_CONCURRENT_PROJECTS", "2"))
 
 _RUNNING_WORKERS: Dict[str, threading.Thread] = {}
 _RUNNING_WORKERS_LOCK = threading.Lock()
@@ -15,6 +19,13 @@ def is_worker_running(project_id: str) -> bool:
     with _RUNNING_WORKERS_LOCK:
         t = _RUNNING_WORKERS.get(project_id)
         return t is not None and t.is_alive()
+
+def stop_all_workers():
+    """Terminates all active workers globally."""
+    with _RUNNING_WORKERS_LOCK:
+        pids = list(_RUNNING_WORKERS.keys())
+    for pid in pids:
+        stop_project_worker(pid)
 
 def stop_project_worker(project_id: str):
     """Signals worker to stop and kills associated containers."""
@@ -77,6 +88,11 @@ def start_project_worker(project_id: str) -> bool:
         if t is not None and t.is_alive():
             logger.warning(f"Worker for project {project_id} is already running. Duplicate start ignored.")
             return False
+
+        active = [p for p, th in _RUNNING_WORKERS.items() if th.is_alive()]
+        if len(active) >= MAX_CONCURRENT_PROJECTS and project_id not in active:
+            logger.warning(f"Concurrency limit ({MAX_CONCURRENT_PROJECTS}) reached. Active projects: {active}")
+            raise RuntimeError(f"Concurrency limit reached ({MAX_CONCURRENT_PROJECTS}). Active projects: {len(active)}")
 
         def worker():
             try:

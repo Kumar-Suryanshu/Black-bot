@@ -164,8 +164,12 @@ def get_events_since(db_path, project_id, last_event_id):
         })
     return events
 
-def insert_evidence(db_path: str, ev_dict: Dict[str, Any], project_id: str):
+def insert_evidence(db_path: str, ev_dict: Any, project_id: str = None):
     init_db(db_path)
+    if isinstance(ev_dict, str) and not isinstance(project_id, str):
+        ev_dict, project_id = project_id, ev_dict
+    if hasattr(ev_dict, "model_dump"):
+        ev_dict = ev_dict.model_dump()
     conn = get_connection(db_path)
     cursor = conn.cursor()
     cursor.execute('''
