@@ -172,3 +172,23 @@ export async function abortProject(projectId: string): Promise<void> {
   });
   if (!res.ok) throw new Error(`Failed to abort project: ${res.statusText}`);
 }
+
+export async function approveProvisioning(projectId: string, packages?: string[]): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/projects/${projectId}/provisioning/approve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ packages, confirm: true }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `Failed to approve provisioning: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function fetchProvisioningPlan(projectId: string): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/projects/${projectId}/provisioning/plan`);
+  if (!res.ok) throw new Error(`Failed to fetch provisioning plan: ${res.statusText}`);
+  return res.json();
+}
+

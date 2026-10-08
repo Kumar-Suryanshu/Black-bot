@@ -242,8 +242,53 @@ def handle_preflight(state: ProjectState, deps: dict):
     if res["blockers"]:
         # Record blocker evidence
         state.phase = "STATUS"
-    else:
+        return
+
+    # Check safe dependency provisioning (Stage 6)
+    from tools.provisioning import build_provisioning_plan, download_wheels_for_project
+    plan = build_provisioning_plan(ws, state.project_id)
+    if plan.get("status") == "NEEDS_BUILD":
+        state.preflight["blockers"].append("NEEDS_BUILD")
+        state.preflight["triage_verdict"] = "NEEDS_BUILD"
+        state.provisioning_plan = plan
+        emit_event(state, "system", "provisioning_blocked", plan.get("reason", "NEEDS_BUILD: sdist-only package"))
+        state.phase = "STATUS"
+        return
+
+    # For benchmark cases b1-b5, dependencies are already in the base/wheelhouse, advance directly to SETUP
+    is_benchmark = bool(state.benchmark_id and state.benchmark_id.startswith("b"))
+    if is_benchmark:
         state.phase = "SETUP"
+        return
+
+    if plan.get("needed") and not state.provisioning_approved:
+        # Pause for human approval gate #3
+        state.provisioning_plan = plan
+        state.pending = {
+            "kind": "provisioning",
+            "id": f"prov_{state.project_id}",
+            "packages": [p["name"] for p in plan["packages"]],
+            "details": plan["packages"],
+            "python_image": plan["python_image"],
+            "warnings": plan.get("warnings", [])
+        }
+        emit_event(state, "system", "provisioning_proposed", f"Provisioning plan proposed for {len(plan['packages'])} packages. Awaiting approval.")
+        return
+
+    if plan.get("needed") and state.provisioning_approved:
+        target_whl = Path(f"data/runs/{state.project_id}/wheelhouse")
+        res = download_wheels_for_project(
+            state.project_id,
+            [p["name"] for p in plan["packages"]],
+            target_whl,
+            python_image=plan["python_image"]
+        )
+        if res.get("log_path") and os.path.exists(res["log_path"]):
+            from tools.evidence import record_evidence
+            record_evidence(state, "log", res["log_path"], None, None, "provision_wheels", f"prov_{state.project_id}")
+        emit_event(state, "system", "provisioning_done", "Wheel packages downloaded into project wheelhouse")
+
+    state.phase = "SETUP"
 
 def handle_setup(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")

@@ -99,10 +99,14 @@ export interface CriticReview {
 }
 
 export interface PendingAction {
-  kind: 'claims' | 'approval';
+  kind: 'claims' | 'approval' | 'provisioning';
   id: string;
   patch_id?: string;
   banner?: string | null;
+  packages?: string[];
+  python_image?: string;
+  warnings?: string[];
+  details?: any[];
 }
 
 export interface ProjectBudgets {

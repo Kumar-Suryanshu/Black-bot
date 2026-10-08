@@ -325,7 +325,7 @@ def generate_report(
 
     # 4. Generate Markdown export
     md_lines = [
-        f"# Rerun Verification Report: {state.benchmark_id}",
+        f"# Rerun Verification Report: {state.benchmark_id or state.project_id}",
         "",
         f"**Project ID:** `{state.project_id}`  ",
         f"**Final Verdict:** `{status_str}` (after {after_n} approved patches)  ",
@@ -428,7 +428,7 @@ def generate_report(
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Rerun Report — {html.escape(state.benchmark_id)}</title>
+  <title>Rerun Report — {html.escape(state.benchmark_id or state.project_id)}</title>
   <style>
     body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, sans-serif; background: #0F172A; color: #E2E8F0; margin: 0; padding: 40px; line-height: 1.6; }}
     .container {{ max-width: 900px; margin: 0 auto; background: #16233F; border: 1px solid #1E293B; border-radius: 12px; padding: 36px; box-shadow: 0 18px 40px -18px rgba(0,0,0,.6); }}

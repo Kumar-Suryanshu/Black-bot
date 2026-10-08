@@ -12,7 +12,8 @@ from tools.report import generate_report
 
 from backend.app.models import (
     ProjectCreateRequest, ProjectCreateResponse,
-    ClaimsConfirmRequest, ApprovalRequest, HealthResponse
+    ClaimsConfirmRequest, ApprovalRequest, HealthResponse,
+    ProvisioningApproveRequest
 )
 from backend.app.db import get_connection, get_project_state, save_project_state
 import backend.app.runner as runner
@@ -251,6 +252,7 @@ def get_project(id: str):
         "budgets": state.budgets,
         "attempts": [a.model_dump() for a in state.attempts],
         "patches": [p.model_dump() for p in state.patches],
+        "provisioning_plan": state.provisioning_plan,
         "status": state.final.get("status") if state.final else state.phase
     }
 
@@ -299,6 +301,70 @@ def reject_claims(id: str):
     state.final = {"status": "INCONCLUSIVE", "reason": "no claim confirmed", "after_n_fixes": 0}
     state.pending = None
     save_project_state("data/rerun.db", id, state.benchmark_id, state.repo_commit, "INCONCLUSIVE", state)
+    return {"status": "rejected"}
+
+@router.get("/api/projects/{id}/provisioning/plan")
+def get_provisioning_plan(id: str):
+    state = get_project_state("data/rerun.db", id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return state.provisioning_plan or {}
+
+@router.post("/api/projects/{id}/provisioning/approve")
+def approve_provisioning(id: str, req: ProvisioningApproveRequest):
+    state = get_project_state("data/rerun.db", id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if not req.confirm:
+        raise HTTPException(status_code=400, detail="Provisioning was not confirmed")
+
+    if state.provisioning_approved:
+        return {"status": "already_approved"}
+
+    from tools.provisioning import download_wheels_for_project
+    from tools.evidence import record_evidence
+    from agent.loop import emit_event
+
+    plan = state.provisioning_plan or {}
+    packages_to_download = req.packages
+    if not packages_to_download:
+        packages_to_download = [p["name"] for p in plan.get("packages", [])]
+
+    python_image = plan.get("python_image", "rerun-base:py311")
+    target_whl = Path(f"data/runs/{id}/wheelhouse")
+
+    res = download_wheels_for_project(id, packages_to_download, target_whl, python_image=python_image)
+
+    # Record log as evidence
+    if res.get("log_path") and os.path.exists(res["log_path"]):
+        record_evidence(state, "log", res["log_path"], None, None, "provision_wheels", f"prov_{id}")
+
+    state.provisioning_approved = True
+    if state.pending and state.pending.get("kind") == "provisioning":
+        state.pending = None
+
+    state.phase = "SETUP"
+    emit_event(state, "system", "provisioning_approved", f"Approved provisioning for {len(packages_to_download)} packages")
+    save_project_state("data/rerun.db", id, state.benchmark_id, state.repo_commit, state.phase, state)
+
+    start_project_worker(id)
+    return {
+        "status": "approved",
+        "downloaded_count": res.get("downloaded_count", 0),
+        "wheel_files": res.get("wheel_files", [])
+    }
+
+@router.post("/api/projects/{id}/provisioning/reject")
+def reject_provisioning(id: str):
+    state = get_project_state("data/rerun.db", id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    state.phase = "DONE"
+    state.final = {"status": "UNABLE_TO_EXECUTE", "reason": "provisioning rejected by user", "after_n_fixes": 0}
+    state.pending = None
+    save_project_state("data/rerun.db", id, state.benchmark_id, state.repo_commit, "UNABLE_TO_EXECUTE", state)
     return {"status": "rejected"}
 
 @router.post("/api/projects/{id}/triage")
