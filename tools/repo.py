@@ -3,6 +3,8 @@ import re
 from pathlib import Path
 from typing import Dict, Any, List
 
+from tools.triage import triage_report
+
 def inspect_repository(workspace: str) -> Dict[str, Any]:
     ws = Path(workspace)
     tree = []
@@ -10,10 +12,11 @@ def inspect_repository(workspace: str) -> Dict[str, Any]:
     dependency_files = []
     config_files = []
     entry_points = []
-    gpu_hints = []
     network_hints = []
-    data_refs = []
     has_smoke_test = (ws / "tests" / "smoke.py").exists()
+
+    # Run deterministic AST triage report
+    triage = triage_report(workspace)
 
     for p in ws.rglob("*"):
         if p.is_file():
@@ -41,11 +44,6 @@ def inspect_repository(workspace: str) -> Dict[str, Any]:
                     if 'if __name__ == "__main__":' in text or "if __name__ == '__main__':" in text:
                         entry_points.append(rel)
                         
-                    # GPU hints
-                    gpu_matches = re.finditer(r"(?i)(\.cuda\(|device\s*=\s*['\"]cuda|torch\.cuda|CUDA_VISIBLE_DEVICES)", text)
-                    for m in gpu_matches:
-                        gpu_hints.append({"file": rel, "text": m.group(0)})
-                        
                     # Network hints
                     net_matches = re.finditer(r"(?i)(requests\.(get|post)|urllib|download=True|https?://)", text)
                     for m in net_matches:
@@ -60,6 +58,18 @@ def inspect_repository(workspace: str) -> Dict[str, Any]:
             if sline.startswith("python ") or sline.startswith("python3 "):
                 readme_commands.append(sline)
 
+    # Refined GPU hints (Fix D5):
+    # Only hard unguarded CUDA calls and CUDA-only packages are blockers.
+    # Guarded torch.cuda.is_available() checks are not blockers.
+    gpu_hints = []
+    for u in triage.get("gpu", {}).get("unguarded", []):
+        gpu_hints.append({"file": u["file"], "text": u["text"], "guarded": False})
+    for cp in triage.get("gpu", {}).get("cuda_packages", []):
+        gpu_hints.append({"file": "requirements.txt", "text": f"CUDA package: {cp}", "guarded": False})
+
+    # Populated data_refs (Fix D6)
+    data_refs = triage.get("missing_data_refs", [])
+
     return {
         "tree": tree,
         "readme_commands": readme_commands,
@@ -71,7 +81,7 @@ def inspect_repository(workspace: str) -> Dict[str, Any]:
             "network": network_hints,
             "data_refs": data_refs
         },
-        "python_requires": ">=3.11",
-        "has_smoke_test": has_smoke_test
+        "python_requires": triage.get("python_requires"),
+        "has_smoke_test": has_smoke_test,
+        "triage": triage
     }
-

@@ -24,7 +24,8 @@ def compute_status(state):
                 }
     
     if env_failed:
-        reason = preflight_blockers[0] if preflight_blockers else "unknown environment error"
+        triage_verdict = state.preflight.get("triage_verdict")
+        reason = triage_verdict if triage_verdict and triage_verdict != "FEASIBLE" else (preflight_blockers[0] if preflight_blockers else "unknown environment error")
         return {
             "status": "UNABLE_TO_EXECUTE",
             "reason": reason,
