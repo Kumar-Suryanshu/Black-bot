@@ -36,7 +36,7 @@ from tools.config_audit import audit as audit_config
 from tools.results import validate_results, load_results
 from tools.evidence import record_evidence
 from tools.repo import inspect_repository
-from tools.paper import extract_text, verify_quote as verify_paper_quote
+from tools.paper import extract_text, extract_paper, verify_quote as verify_paper_quote, resolve_setting_key
 from tools.preflight import preflight_check
 from tools.exec_tools import query_package_index
 from tools.report import generate_report
@@ -145,30 +145,47 @@ def handle_analyze(state: ProjectState, deps: dict):
     state.repo_profile = inspect_repository(ws)
     
     paper_path = state.paper_path or deps.get("paper_path", "benchmarks/papers/digits_softmax.pdf")
-    paper_text_data = extract_text(paper_path) if paper_path and os.path.exists(paper_path) else {"full_text": "", "marked_text": ""}
+    paper_text_data = extract_paper(paper_path) if paper_path and os.path.exists(paper_path) else {"full_text": "", "marked_text": "", "selected_prompt_text": "", "tables": []}
+    prompt_paper_text = paper_text_data.get("selected_prompt_text") or paper_text_data.get("marked_text", "")
     
     # Solver extract_claims
     try:
         out = llm_call(
             "solver", "extract_claims",
-            {"paper_text": paper_text_data["marked_text"]},
+            {"paper_text": prompt_paper_text},
             ExtractClaimsOutput,
             benchmark_id=state.benchmark_id
         )
-        # Filter quotes against full paper text
+        # Filter quotes against full paper text and extracted tables (R5)
         verified_claims = []
+        tables = paper_text_data.get("tables", [])
         for idx, c in enumerate(out.claims):
             c.id = f"C-{idx + 1}"
-            if verify_paper_quote(paper_text_data["full_text"], c.source_quote):
-                c.primary = True
+            if verify_paper_quote(paper_text_data["full_text"], c.source_quote, tables=tables):
+                c.quote_verified = True
+                c.verified_in_paper = True
+                if len(verified_claims) == 0:
+                    c.primary = True
+                    c.selected = True
+                elif len(verified_claims) < 3:
+                    c.primary = False
+                    c.selected = True
+                else:
+                    c.primary = False
+                    c.selected = False
                 verified_claims.append(c)
             else:
-                state.unresolved_issues.append(f"Claim {c.id} quote not found in paper text")
+                c.quote_verified = False
+                c.verified_in_paper = False
+                state.unresolved_issues.append(f"Claim {c.id} quote not found in paper text or tables (rejected)")
         state.claims = verified_claims
 
         verified_settings = []
         for ps in out.paper_settings:
-            if verify_paper_quote(paper_text_data["full_text"], ps.source_quote):
+            if verify_paper_quote(paper_text_data["full_text"], ps.source_quote, tables=tables):
+                repo_k, status = resolve_setting_key(ps.key, repo_workspace=ws)
+                ps.repo_key = repo_k
+                ps.alias_validated = (status == "validated_in_repo")
                 verified_settings.append(ps)
         state.paper_settings = verified_settings
     except Exception as e:
