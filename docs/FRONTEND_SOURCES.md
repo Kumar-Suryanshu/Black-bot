@@ -13,7 +13,7 @@ All illustrations are crafted as bespoke inline SVG components without external 
 - `PineBranchSvg`: Evergreen pine needles with pine cone clusters.
 - `SquirrelSvg`: Perched woodland squirrel holding an acorn.
 - `PenSketchPeakSvg`: Hand-drawn cross-hatched summit illustration.
-- `BadgeLogo`: Signature mountain-in-loop seal for Rerun & InnoHacks 4.0.
+- `BadgeLogo`: Signature mountain-in-loop seal for Rerun.
 
 ## 3. Seeded Noise & Procedural Shaders
 - `Mulberry32`: High-speed, 32-bit seeded pseudo-random number generator used in `tear.ts` to ensure mathematically identical ragged edge curves across all reloads.

@@ -4,7 +4,7 @@ export const BadgeLogo: React.FC<{ className?: string }> = ({ className = '' }) 
   return (
     <div
       className={`relative w-[50px] h-[58px] border border-current flex flex-col items-center justify-between p-1.5 select-none transition-colors duration-300 ${className}`}
-      title="Rerun · InnoHacks 4.0"
+      title="Rerun · Autonomous Reproduction"
     >
       {/* Mountain-in-loop signature mark */}
       <svg
@@ -24,10 +24,10 @@ export const BadgeLogo: React.FC<{ className?: string }> = ({ className = '' }) 
           opacity="0.85"
         />
       </svg>
-      {/* R and InnoHacks text */}
+      {/* Rerun mark text */}
       <div className="flex items-center justify-between w-full px-0.5 text-[8px] font-mono tracking-widest uppercase opacity-80">
         <span className="font-bold">R</span>
-        <span className="text-[6px] tracking-normal">4.0</span>
+        <span className="text-[6px] tracking-normal">LAB</span>
       </div>
     </div>
   );

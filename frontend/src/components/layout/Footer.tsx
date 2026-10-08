@@ -21,7 +21,7 @@ export const Footer: React.FC = () => {
                 RERUN
               </span>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-sm bg-[#FAF7F0] text-[#1F2A44] border border-[#CDC5B4] shadow-sm font-bold">
-                InnoHacks 4.0
+                RESEARCH EDITION
               </span>
             </div>
             <p className="text-xs text-[#4A5470] max-w-md font-sans leading-relaxed">
@@ -38,13 +38,13 @@ export const Footer: React.FC = () => {
           </div>
         </div>
 
-        {/* Mandatory Hackathon Disclaimer */}
+        {/* Evaluation Scope & Integrity */}
         <div className="pt-6 border-t border-[#CDC5B4] flex flex-col md:flex-row items-center justify-between gap-4 text-[11px] font-mono text-[#4A5470]/90">
           <p className="italic text-center md:text-left">
             "Benchmarks are synthetic. Rerun checks computational reproducibility only; a failed reproduction does not mean a paper is wrong."
           </p>
           <div className="flex items-center gap-4 font-semibold text-[#1F2A44]">
-            <span>InnoHacks 4.0 · 2026</span>
+            <span>Rerun Lab · 2026</span>
           </div>
         </div>
       </div>
