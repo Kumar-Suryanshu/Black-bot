@@ -1,0 +1,21 @@
+{
+  "id": "real_case_snake",
+  "title": "Snake Periodic Activation",
+  "command": "python train.py",
+  "repo_url": "https://github.com/AdenosHermes/NeurIPS_2020_Snake",
+  "commit_sha": "e620575d5b78caad855737d92fbfa605f6a96e95",
+  "paper_path": "docs/Research papers/Neural Networks Fail to Learn Periodic Functions.pdf",
+  "claims": [
+    {
+      "id": "C-1",
+      "statement": "Snake activation extrapolates on periodic functions with MSE <= 0.05",
+      "metric": "test_extrapolation_mse",
+      "reported": 0.0212,
+      "tolerance": {"type": "abs", "value": 0.03},
+      "result_key": "test_extrapolation_mse",
+      "source_ref": "Section 4.1",
+      "source_quote": "extrapolation error for Snake activation"
+    }
+  ],
+  "expected_status": "REPRODUCED"
+}

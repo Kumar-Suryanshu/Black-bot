@@ -1,0 +1,21 @@
+{
+  "id": "real_case_eldr",
+  "title": "ELDR Group Explanations",
+  "command": "python explain.py",
+  "repo_url": "https://github.com/GDPlumb/ELDR",
+  "commit_sha": "0446738980b1fc7d16ba586fa6443c683b589ee8",
+  "paper_path": "docs/Research papers/Explaining Groups of Points in Low-Dimensional Representations.pdf",
+  "claims": [
+    {
+      "id": "C-1",
+      "statement": "Representation reconstruction loss <= 0.045",
+      "metric": "reconstruction_loss",
+      "reported": 0.0384,
+      "tolerance": {"type": "abs", "value": 0.01},
+      "result_key": "reconstruction_loss",
+      "source_ref": "Section 5",
+      "source_quote": "reconstruction loss of the latent explanation"
+    }
+  ],
+  "expected_status": "REPRODUCED"
+}

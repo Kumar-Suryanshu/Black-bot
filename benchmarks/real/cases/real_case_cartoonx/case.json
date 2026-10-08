@@ -1,0 +1,12 @@
+{
+  "id": "real_case_cartoonx",
+  "title": "CartoonX Image Explanation",
+  "command": "python run.py",
+  "repo_url": "https://github.com/skmda37/CartoonX",
+  "commit_sha": "fedcba9876543210fedcba9876543210fedcba98",
+  "paper_path": "docs/Research papers/Cartoon Explanations of Image Classifiers.pdf",
+  "claims": [],
+  "expected_status": "UNABLE_TO_EXECUTE",
+  "expected_blocker": "NEEDS_GPU",
+  "triage_verdict": "correctly triaged out"
+}
