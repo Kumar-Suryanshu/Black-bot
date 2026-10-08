@@ -217,4 +217,9 @@ export interface ReportData {
   statements?: ReportStatement[];
   confidence_factors?: Record<string, any>;
   limitations?: string[];
+  simulated?: boolean;
+  repo_url?: string;
+  repo_commit?: string;
+  paper_path?: string;
+  unselected_claims?: any[];
 }

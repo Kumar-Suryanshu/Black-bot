@@ -3,7 +3,7 @@
 > **Project:** Rerun — Autonomous Research Paper Reproducibility Agent
 > **Team Size:** 3 members
 > **Primary Tool:** Google Antigravity (each member runs their own session)
-> **Source of Truth:** [`rerun_antigravity_build_prompt.md`](file:///c:/Users/shivt/Documents/Programs/Rerun/Black-bot/rerun_antigravity_build_prompt.md) (technical spec) and [`rerun_project_guide.md`](file:///c:/Users/shivt/Documents/Programs/Rerun/Black-bot/rerun_project_guide.md) (human guide)
+> **Source of Truth:** [`docs/Rerun_Antigravity_Build_Prompt.md`](docs/Rerun_Antigravity_Build_Prompt.md) (technical spec) and [`docs/Rerun_Project_Guide.md`](docs/Rerun_Project_Guide.md) (human guide)
 
 ---
 
@@ -59,7 +59,7 @@ The build prompt (§1.11 and project guide §12) defines four work packages. Wit
 | **Member 3** | **C: Benchmark + Evaluation** | Template repo, calibration, 5 test cases, mini-papers, baselines, adversarial fixtures, evaluation harness | **4, 5, 12** | Self-contained testing world; can work mostly independently |
 
 > [!IMPORTANT]
-> **Stage 1 (Contracts) is already done.** All data models in [`agent/state.py`](file:///c:/Users/shivt/Documents/Programs/Rerun/Black-bot/src/core/models.py) and the schemas from §6 of the build prompt are frozen. **Do not change a contract** without updating every user and recording it in `docs/DECISIONS.md`.
+> **Stage 1 (Contracts) is already done.** All data models in [`agent/state.py`](agent/state.py) and the schemas from §6 of the build prompt are frozen. **Do not change a contract** without updating every user and recording it in `docs/DECISIONS.md`.
 
 ### Assign Names Now
 

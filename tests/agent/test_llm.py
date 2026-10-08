@@ -63,7 +63,8 @@ def test_replay_mode_miss(tmp_path, monkeypatch):
     from agent import llm
     monkeypatch.setattr(llm, "LLM_MODE", "replay")
     monkeypatch.setattr(llm, "CASSETTE_DIR", str(tmp_path))
-    
+    monkeypatch.setattr(llm, "_ACTIVE_FAKE_LLM", None)
+
     with pytest.raises(RuntimeError, match="Cassette miss"):
         call("solver", "unknown_mode", {"a": 1}, SampleModel)
 

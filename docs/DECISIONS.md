@@ -47,3 +47,21 @@
   - Download endpoint `/api/projects/{id}/report.md` provides clean GitHub-compatible Markdown.
   - Download endpoint `/api/projects/{id}/report.html` provides a self-contained, printable, styled HTML document with embedded CSS.
 
+## 6. API Key Rotation Policy & Quota Compliance (Stage 12 / Step 3)
+- **Compliance Analysis**: Google Generative AI / Gemini API terms prohibit creating multiple accounts or rotating credentials to evade free-tier rate limits or usage quotas.
+- **Decision & Default Stance**:
+  - Multi-key rotation is **disabled by default in standard configuration**. `.env.example` ships with a single `SOLVER_API_KEY` and empty `GEMINI_API_KEYS=`.
+  - Production deployments should use a single paid quota tier or documented organization quota.
+  - For continuous integration and local regression suites, Rerun utilizes **Cassette Record/Replay** (`LLM_MODE=replay`), derived exclusively from real runs, avoiding unnecessary live calls and eliminating quota exhaustion.
+  - The rotation engine in `agent/key_rotator.py` is maintained for legitimate multi-project organizational credential pools with task-boundary awareness and soft request ceilings, but is not configured by default.
+
+## 7. Self-Contained Reproduction Kit Architecture (Stage 10 / R7)
+- **Decision**: Rather than forcing subsequent researchers to re-run the full AI agent from scratch, Rerun packages a deterministic reproduction kit (`rerun_kit.zip`) containing:
+  - `reproduce.md`: Complete terminal walkthrough with pinned git commit SHA, Python version, dependencies, exact command, random seeds, and expected vs observed tolerances.
+  - `patches/*.diff`: Standard unified diffs applicable directly via `git apply`.
+  - `results/` & `logs/`: Original attempt execution outputs and raw logs.
+  - `report.md` / `report.html`: Verifier-certified reports.
+  - `evidence_index.json`: Full structured evidence ledger.
+- This decoupling allows third-party auditors to verify reproductions in clean Docker containers without AI dependency or agent installation.
+
+

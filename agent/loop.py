@@ -66,6 +66,28 @@ def set_sandbox(sb):
     global _OVERRIDE_SANDBOX
     _OVERRIDE_SANDBOX = sb
 
+def resolve_attempt_log(state: ProjectState, deps: dict, attempt_num: Optional[int] = None) -> Optional[Path]:
+    """Robustly resolves the path to an attempt's execution log file."""
+    att = state.attempts[attempt_num - 1] if attempt_num and 0 < attempt_num <= len(state.attempts) else (state.attempts[-1] if state.attempts else None)
+    n = att.n if att else (attempt_num or len(state.attempts) or 1)
+    
+    candidates = []
+    if att and att.log_path:
+        candidates.append(Path(att.log_path))
+    if getattr(state, "latest_log_path", None):
+        candidates.append(Path(state.latest_log_path))
+    if deps.get("latest_log_path"):
+        candidates.append(Path(deps["latest_log_path"]))
+    candidates.append(Path("data/runs") / state.project_id / "logs" / f"run_{n}.log")
+    
+    ws = deps.get("workspace", state.workspace or f"data/runs/{state.project_id}/workspace")
+    candidates.append(Path(ws) / "logs" / f"run_{n}.log")
+    
+    for c in candidates:
+        if c and str(c).strip() and c.is_file():
+            return c
+    return None
+
 def guard_budgets(state: ProjectState) -> bool:
     if state.phase in ("STATUS", "REPORT", "REPORT_REVIEW", "DONE"):
         return False
@@ -385,23 +407,18 @@ def handle_observe(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
     latest = state.attempts[-1]
     ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
-    log_candidates = [
-        Path(deps.get("latest_log_path", "")),
-        Path("data/runs") / state.project_id / "logs" / f"run_{latest.n}.log",
-        Path(ws) / "logs" / f"run_{latest.n}.log"
-    ]
-    log_text = ""
-    for lc in log_candidates:
-        if lc and lc.is_file():
-            try:
-                log_text = lc.read_text(encoding="utf-8")
-                break
-            except Exception:
-                pass
+    log_file = resolve_attempt_log(state, deps, latest.n)
+    log_text = log_file.read_text(encoding="utf-8", errors="ignore") if log_file else ""
     
-    # Classify errors if crashed
+    # Classify errors if crashed (D19: includes attempt flags)
     if latest.exit_code != 0:
-        err_info = classify_error(log_text)
+        err_info = classify_error(
+            log_text,
+            attempt=latest,
+            exit_code=latest.exit_code,
+            oom=latest.oom,
+            timed_out=latest.timed_out
+        )
         latest.error_class = err_info["error_class"]
         state.phase = "DIAGNOSE"
     else:
@@ -495,13 +512,24 @@ def handle_diagnose(state: ProjectState, deps: dict):
         state.config_diff = audit_config(ws, state.plan, state.paper_settings)
         emit_event(state, "system", "orchestrator_forced", "Safety-net nudge: auto-ran compare_configuration")
 
+    # Extract recent log/traceback excerpt for solver observation
+    obs_text = "See latest run results/logs"
+    latest_log = resolve_attempt_log(state, deps)
+    if latest_log:
+        try:
+            raw_log = latest_log.read_text(encoding="utf-8", errors="ignore").strip()
+            lines = raw_log.splitlines()
+            obs_text = "\n".join(lines[-40:]) if len(lines) > 40 else raw_log
+        except Exception:
+            pass
+
     # Mode diagnose_step
     try:
         diag_out = llm_call(
             "solver", "diagnose_step",
             {
                 "state_summary": f"Step {step_num}, silent_divergence={silent_div}",
-                "observation": "See latest run results/logs",
+                "observation": obs_text,
                 "allowed_tools": [
                     {"name": "inspect_file"},
                     {"name": "search_repository"},
@@ -549,12 +577,7 @@ def handle_diagnose(state: ProjectState, deps: dict):
             state.config_diff = audit_config(ws, state.plan, state.paper_settings)
             emit_event(state, "tool", "tool_finished", "Executed compare_configuration")
         elif action_tool == "read_logs":
-            log_candidates = [
-                Path(deps.get("latest_log_path", "")),
-                Path("data/runs") / state.project_id / "logs" / f"run_{len(state.attempts)}.log",
-                Path(ws) / "logs" / f"run_{len(state.attempts)}.log"
-            ]
-            found = next((lc for lc in log_candidates if lc and lc.is_file()), None)
+            found = resolve_attempt_log(state, deps, len(state.attempts))
             if found:
                 ev = record_evidence(state, "log", str(found), action_args.get("line_start"), action_args.get("line_end"), "read_logs", f"diag_step_{step_num}")
                 emit_event(state, "tool", "evidence_recorded", "Read logs", evidence_ids=[ev.id])
@@ -563,12 +586,7 @@ def handle_diagnose(state: ProjectState, deps: dict):
             if step_num >= DIAGNOSE_STEPS_MAX:
                 state.phase = "STATUS"
         elif action_tool == "inspect_error":
-            log_candidates = [
-                Path(deps.get("latest_log_path", "")),
-                Path("data/runs") / state.project_id / "logs" / f"run_{len(state.attempts)}.log",
-                Path(ws) / "logs" / f"run_{len(state.attempts)}.log"
-            ]
-            found = next((lc for lc in log_candidates if lc and lc.is_file()), None)
+            found = resolve_attempt_log(state, deps, len(state.attempts))
             if found:
                 ev = record_evidence(state, "log", str(found), None, None, "inspect_error", f"diag_step_{step_num}")
                 emit_event(state, "tool", "evidence_recorded", "Inspected error in logs", evidence_ids=[ev.id])

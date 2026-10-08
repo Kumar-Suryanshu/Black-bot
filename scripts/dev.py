@@ -81,7 +81,7 @@ def main():
     subparsers.add_parser("seed-faults")
     subparsers.add_parser("adversarial")
     subparsers.add_parser("record")
-    subparsers.add_parser("replay")
+    subparsers.add_parser("bench-real")
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("--case", required=True, help="Benchmark case id (b1_control, b2_dependency, b3_silent_config, b4_combined, b5_unable)")
     subparsers.add_parser("build-benchmarks")
@@ -121,11 +121,17 @@ def main():
         print("✅ Benchmarks built successfully!")
     elif args.command == "bench":
         run_cmd(f"{sys.executable} benchmarks/run_bench.py --systems {args.systems}")
+    elif args.command == "bench-real":
+        run_cmd(f"{sys.executable} scripts/run_real_bench.py")
     elif args.command == "adversarial":
         run_cmd(f"{sys.executable} scripts/run_adversarial.py")
     elif args.command == "run":
         from scripts.run_case import run_case_headless
         run_case_headless(args.case)
+    elif args.command == "api":
+        run_cmd(f"{sys.executable} -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload")
+    elif args.command == "ui":
+        run_cmd("npm run dev --prefix frontend")
     else:
         print(f"Command '{args.command}' is not yet implemented fully.")
 

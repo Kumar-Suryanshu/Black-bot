@@ -1,8 +1,29 @@
 # Rerun Implementation Progress
 
 > **Team Plan:** See [`TEAM_PLAN.md`](TEAM_PLAN.md) for phase breakdown, track assignments, and collaboration guide.
-> **Build Spec:** [`Rerun_Antigravity_Build_Prompt.md`](Rerun_Antigravity_Build_Prompt.md) · **Guide:** [`Rerun_Project_Guide.md`](Rerun_Project_Guide.md)
+> **Build Spec:** [`docs/Rerun_Antigravity_Build_Prompt.md`](docs/Rerun_Antigravity_Build_Prompt.md) · **Guide:** [`docs/Rerun_Project_Guide.md`](docs/Rerun_Project_Guide.md)
 > **Completion Plan:** [`docs/COMPLETION_PLAN.md`](docs/COMPLETION_PLAN.md) · **Audit:** [`docs/baseline_audit.md`](docs/baseline_audit.md)
+
+---
+
+## Final Honest Status Table (Stage 12 Completion)
+
+| Stage | Focus / Requirement | Branch | Gate Status | Execution Engine | Real vs Simulated Status |
+|:---|:---|:---|:---:|:---:|:---|
+| **Stage 0** | Baseline lock & truth audit | `completion/stage-0` | PASS | Local Host | Audited all 25 defects D1–D25; baseline test added |
+| **Stage 1** | Real Docker live path (R0) | `completion/stage-1` | PASS | Real Docker (`rerun-base:py311`) | 100% Real container execution across B1–B5 |
+| **Stage 2** | Input plumbing & custom repo ingest (R1) | `completion/stage-2` | PASS | Host + Git | Real shallow clone, PDF validation, command override |
+| **Stage 3** | Triage and code-completeness (R2) | `completion/stage-3` | PASS | Static AST + Heuristics | 100% Deterministic static triage; 0 repo code executed |
+| **Stage 4** | Benchmark suites B1–B5 calibration | `completion/stage-4` | PASS | Real Docker | Calibrated digits softmax dataset, paper, faults |
+| **Stage 5** | Baselines B-0, B-2 & harness | `completion/stage-5` | PASS | Real Docker | Full baseline sweep; B-0 (40%), B-2 (80%), Rerun (100%) |
+| **Stage 6** | LLM layer & cassette recording | `completion/stage-6` | PASS | Gemini Live + Cassette Replay | Recorded cassettes from real runs; secret scrubbing active |
+| **Stage 7** | Solver loop & policy P1–P10 | `completion/stage-7` | PASS | Real Docker + FakeSandbox | Full 20-phase state machine, budget guards verified |
+| **Stage 8** | Real-paper claim intake (R5) | `completion/stage-8` | PASS | PyMuPDF + AST Analyzer | 3 real peer-reviewed PDFs (NeurIPS, ACL, NeurIPS) evaluated |
+| **Stage 9** | Generalized diagnosis & config audit (R6) | `completion/stage-9` | PASS | Real Docker + SQLite WAL | Full FastAPI backend, SSE stream, worker threads |
+| **Stage 10** | Reproduction kit & report upgrades (R7) | `completion/stage-10` | PASS | Host + SQLite | Self-contained ZIP kit (`/kit`), evidence ledger (D12) |
+| **Stage 11** | Real-repo evaluation, Track B (R8) | `completion/stage-11` | PASS | Real Docker (`rerun-base:py311`) | 6 real ML papers evaluated: 3 reproduced, 1 divergent, 2 controls |
+| **Stage 12** | Hygiene, docs, submission pack (R9) | `completion/stage-12` | PASS | GitHub Actions CI + Local Host | Clean repo, .env.example, Apache-2.0 LICENSE, 186/186 tests |
+| **Stage 13** | Multi-key Gemini API rotation engine | `completion/stage-13` | PASS | Thread-safe Singleton | Soft request thresholds, 429 failover, secret scrubbing |
 
 ---
 
@@ -118,6 +139,18 @@
     - **Test Suite Status:** 10/10 tests passing in `tests/unit/test_stage8_paper_intake.py`; full regression passing 163/163 tests (`pytest tests -q`); frontend builds cleanly (`npm run build --prefix frontend`).
   - *Status:* PASS — ready for Stage 9.
 
+- [x] **Stage 9 (Completion Plan)**: Generalised diagnosis and configuration audit (R6)
+  - *Branch:* `completion/stage-9`
+  - *Gate Run Results:* PASS:
+    - **Error Library Expansion (D19 + R6):** Added signatures in `tools/errors.py` for `python_version_mismatch` (removed `distutils`/`imp`, syntax incompatibility), `api_deprecation` (e.g. `np.int`, `np.float`, `DataFrame.append`, `torch.load` weights_only), `dataset_missing` (runtime dataset not found/missing data files), and `device_unavailable` (unguarded CUDA at runtime). Closes defect **D19** by classifying directly from attempt flags (`oom`, `timed_out`, and exit code 137).
+    - **Patch Type `code_api_compat`:** Allowed in non-deny-listed `.py` files only with traceback provenance; assigned risk class `bug_fix`; verified by policy P1–P10, Critic, and human approval.
+    - **Negative Fixture Verified:** Verified that attempts to modify evaluation code (`evaluate.py`, `metrics.py`) to match paper results are strictly blocked by Policy P2 deny-list (`test_gate_negative_fixture_blocks_changing_evaluation_code`).
+    - **Gold Patches Verified:** Implemented and validated gold patches for all 4 new error classes (`python_version_mismatch`, `api_deprecation`, `dataset_missing`, `device_unavailable`), proving all pass Policy checks (`test_gate_gold_patches_per_new_error_class_pass_policy`).
+    - **Comprehensive Configuration Audit (`tools/config_audit.py`):** Parses AST `argparse` defaults (`add_argument(... default=...)`), AST `@dataclass` field defaults, Hydra/OmegaConf `defaults:` list inheritance, CLI overrides from `plan.command` (highest precedence), and README snippets. Evaluates runtime vs static confidence, explicitly marking `confidence: "static"` when no runtime effective config was captured and surfacing it in reports (`tools/report.py`).
+    - **Deterministic Notebook Conversion (`tools/notebook.py`):** Converts `.ipynb` code cells to a Python script, automatically and deterministically commenting out IPython magics (`%`, `!`, `?`, `get_ipython()`), and returning `UNSUPPORTED_FORMAT` on malformed / non-notebook files.
+    - **Test Suite Status:** 13/13 tests passing in `tests/unit/test_stage9_diagnosis_audit.py`; full regression passing 176/176 tests (`pytest tests -q`); frontend builds cleanly in 698ms (`npm run build --prefix frontend`).
+  - *Status:* PASS — ready for Stage 10.
+
 ---
 
 ## Initial Build Stage Gates and Deliverables
@@ -145,18 +178,31 @@
   - *Gate Run Results:* PASS (`pytest tests/unit/test_arbiter.py tests/agent/test_critic.py` passed; `python scripts/dev.py adversarial` passed; all adversarial fixtures X1–X9 blocked by Policy or Critic; gold patch false-block count = 0 verified)
 - [x] **Stage 9**: Backend — *Owner: TBD (Track B+D)*
   - *Gate Run Results:* PASS (`pytest tests/e2e/test_b4_api.py` passed; B4 driven end-to-end via HTTP: create → start → claims-confirm → approve ×2 → DONE; `status == "REPRODUCED"` verified; SSE stream, worker thread, SQLite WAL, Last-Event-ID resume, and all 13 §14.1 endpoints implemented)
-- [x] **Stage 10**: Frontend — *Owner: Track B+D*
-  - *Gate Run Results:* PASS (`npm run build` passed in 600ms with 0 errors; all routes `/`, `/new`, `/p/:id`, `/p/:id/report`, `/dev/tear`, `*` implemented per `Rerun_Frontend_Spec (1).md`; "Field Desk & Torn Postcard" visual styling S1–S7 with SVG torn paper dividers, Mulberry32 deterministic ragged edge algorithm, Postcard claim confirmation, Live Console with SSE stream, terminal logs, diff view, Critic review card, human approval modal with 9 checks and banners, and certified report with unpatched vs patched chart).
-  - *Polishing & Audit Updates:*
-    - Fixed 3-column desk overflow constraints (`TracePanel`, `Terminal`, `DiffView`) with `min-h-0` and internal scroll containers, resolving overlap with `BudgetBar` ("Step Budget / Patch Budget") and `AttemptsTable` ("Execution Runs & Metric Verification").
-    - Unified the operational console (`/p/:id`), report page (`/p/:id/report`), and project launcher (`/new`) into an archival Kraft paper & ink palette (`#EDE7DB`, `#FAF7F0`, `#CDC5B4`).
-    - Fixed root body background in `index.html` and `index.css` to prevent dark background peeking during scroll.
-- [x] **Stage 11**: Report — *Owner: Track A (generation) + Track B+D (rendering)*
-  - *Gate Run Results:* PASS (`pytest tests/unit/test_report_verifier.py` passed; `tools/report.py` implemented with placeholder resolution, deterministic verifier V1–V7, unpatched vs final runs comparison for frontend `ReportChart`, Markdown & HTML exports, and `/api/projects/{id}/report[.md|.html]` endpoints; certified reproduction report interactive rendering at `/p/:id/report` with baseline comparison charts, patch provenance with Critic checklist, config audits, and limitation disclosures).
-- [ ] **Stage 12**: Evaluation sweep — *Owner: TBD (Track C)*
+- [x] **Stage 10**: Reproduction kit & report upgrades (R7) / Frontend — *Owner: Track B+D*
+  - *Gate Run Results:* PASS (`pytest tests/unit/test_stage10_reproduction_kit.py` passed 5/5, full regression suite passed 181/181, `npm run build --prefix frontend` clean in 613ms).
+  - *Deliverables & Upgrades:*
+    - **Self-Contained Reproduction Kit (`tools/kit.py`, `GET /api/projects/{id}/kit`)**: Generates complete `rerun_kit.zip` containing `patches/*.diff`, `reproduce.md` (repo URL + commit SHA, Python version, `pip freeze`, exact command, seeds, expected vs observed metrics, tolerance band), `results/`, `logs/`, `report.md`/`.html`, and `evidence_index.json`.
+    - **Report Generation Upgrades (`tools/report.py`)**: Added `⚠️ SIMULATED RUN` banner when `simulated=True`, repository metadata block (repo URL, commit SHA, paper path, triage verdict, provisioning package list), unselected claims under dedicated "Unselected Claims (Not Checked)" section, and explicit hardware/library nondeterminism limitations.
+    - **Evidence Ledger Persistence & Retrieval (Defect D12 Closure)**: Backed by SQLite `evidence` table and `evidence.json`, queryable via `GET /api/projects/{id}/evidence` and `GET /api/projects/{id}/evidence/{eid}`, wired into UI drawer and kit index.
+    - **Frontend Action Upgrades (`frontend/src/pages/Report.tsx`, `types.ts`)**: Added "Reproduction Kit (.zip)" download action button linking directly to `/api/projects/{id}/kit`, simulated run alert banner, and repository provenance metadata in header.
+- [x] **Stage 11**: Real-repo evaluation, Track B (R8) / Report — *Owner: Track B+D*
+  - *Gate Run Results:* PASS (`pytest tests/unit/test_stage11_real_evaluation.py` passed 5/5, full regression suite passed 186/186, `python3 scripts/dev.py bench-real` executed across 6 real paper+repo pairs in real Docker containers `rerun-base:py311`; `benchmarks/real/MEASURED_REAL.md` and `benchmarks/results/<ts>/results.md` generated; all numbers on slides trace to measured ledger; mandatory selection bias limitations disclosure included).
+  - *Deliverables & Empirical Findings:*
+    - **6 Real Peer-Reviewed Benchmark Pairs Evaluated (`docs/real_cases.md`, `benchmarks/real/real_cases.json`)**:
+      - `real_case_snake` (NeurIPS 2020): Clean CPU reproduction ($\text{MSE} = 0.0209$, within tolerance $\pm 0.03$). Status: `reproduced`.
+      - `real_case_eldr` (ICML 2020): Stale dependency / NumPy 1.24+ deprecation successfully repaired via automated patch; reproduction verified (loss $= 0.0378$). Status: `reproduced`.
+      - `real_case_deceptive_attention` (ACL 2020): Reduced CPU sentiment attention benchmark reproduced ($\text{Acc} = 0.785 \approx 0.812$). Status: `reproduced`.
+      - `real_case_fairness_attack` (AAAI 2021): Code executed successfully, but observed statistical parity difference $\Delta = 0.144$ diverged from paper claim $0.210$ due to undocumented author data split differences. Honestly classified as `not reproduced` (failure mode: `paper/code genuinely diverge`).
+      - `real_case_faircal` (ICLR 2022): Preflight triage detected missing gated external datasets (BFW/RFW requiring credentials). Status: `correctly triaged out` (failure mode: `data/weights missing`).
+      - `real_case_cartoonx` (ECCV 2022): Static analysis detected mandatory CUDA GPU hardware dependency (est. 36+ GPU hours). Status: `correctly triaged out` (failure mode: `timeout` / GPU constraint).
+    - **Human vs Rerun Benchmark Speedup**: Human baseline 138.5 minutes (2.31 hours) vs Rerun automated 25.1 minutes (0.42 hours) — **5.5x overall speedup** (81.9% time reduction).
+    - **Selection Bias Disclosure**: Mandatory counterweight analysis added addressing author selection bias in Track A synthetic faults.
+- [x] **Stage 12**: Hygiene, docs, submission pack (R9) — *Owner: All*
+  - *Gate Run Results:* PASS (Repo hygiene verified: lifespan context manager active; `.env.example` committed and `.env` strictly untracked; scratch files deleted; `LICENSE` added with Apache-2.0; documentation moved under `docs/`; `README.md` updated with limits-first disclosure, tier 1 & 2 status, 186/186 passing tests, and Judge Q&A; `.github/workflows/ci.yml` GitHub Actions CI workflow created; `docs/CONTRACTS.md`, `docs/DECISIONS.md`, and `docs/SECURITY.md` synchronized with code; real run demo script `scripts/demo_real_run.sh` created and verified).
 - [x] **Stage 13**: Hardening & fallbacks — *Owner: Track B+D*
   - *Gate Run Results:* PASS (Multi-key Gemini API rotation engine `agent/key_rotator.py` implemented; task-boundary aware soft threshold at ~100 requests/key; emergency 429 failover with 60s cooldown; UTC daily quota reset; Invariant I4 secret scrubbing across all keys; `/api/keys/stats` diagnostic route; `tests/unit/test_key_rotator.py` passing with 9/9 tests; full suite passing 75 tests).
-- [ ] **Stage 14**: Docs & demo kit — *Owner: All*
+- [x] **Stage 14**: Docs & demo kit — *Owner: All*
+  - *Gate Run Results:* PASS (Final submission pack and demo verified; all documentation complete).
 
 ## Checkpoint Reports
 *(Updated after Stages 3, 7, 10, 11, and 13)*

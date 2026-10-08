@@ -3,6 +3,7 @@ import hashlib
 import time
 import re
 import os
+import random
 from pathlib import Path
 from typing import Literal, Type, Optional, Callable
 from pydantic import BaseModel, ValidationError
@@ -174,7 +175,7 @@ def call(
     payload: dict,
     out_model: Type[BaseModel],
     benchmark_id: str = "default",
-    max_retries: int = 2
+    max_retries: int = 3
 ) -> BaseModel:
     """
     Main entry point for LLM interactions in Rerun.
@@ -263,30 +264,52 @@ def call(
             except httpx.HTTPStatusError as e:
                 attempt_err = e
                 status_code = e.response.status_code if e.response is not None else 0
-                if prov == "gemini" and status_code == 429:
-                    old_key = current_key
-                    current_key = key_rotator.report_rate_limit(old_key)
-                    if _EVENT_LISTENER:
-                        _EVENT_LISTENER("rate_limit_rotation", {
-                            "old_key": scrub_secrets(old_key),
-                            "new_key": scrub_secrets(current_key),
-                            "status_code": 429
-                        })
+                if status_code == 429:
+                    retry_after = None
+                    if e.response is not None:
+                        ra = e.response.headers.get("retry-after") or e.response.headers.get("Retry-After")
+                        if ra:
+                            try:
+                                retry_after = float(ra)
+                            except ValueError:
+                                pass
+
+                    if prov == "gemini":
+                        old_key = current_key
+                        current_key = key_rotator.report_rate_limit(old_key)
+                        if _EVENT_LISTENER:
+                            _EVENT_LISTENER("rate_limit_rotation", {
+                                "old_key": scrub_secrets(old_key),
+                                "new_key": scrub_secrets(current_key),
+                                "status_code": 429
+                            })
+                        if current_key != old_key:
+                            # Fresh distinct key from pool available: retry immediately
+                            continue
+
+                    # Same key or pool exhausted: MUST backoff to allow rate-limit window to reset
+                    backoff = retry_after if retry_after is not None else min(30.0, 2.0 * (2 ** i) + random.uniform(0.1, 0.5))
+                    time.sleep(backoff)
                     continue
-                time.sleep(0.5 * (2 ** i))
+                time.sleep(min(15.0, 0.5 * (2 ** i)))
             except Exception as e:
                 attempt_err = e
-                if prov == "gemini" and "429" in str(e):
-                    old_key = current_key
-                    current_key = key_rotator.report_rate_limit(old_key)
-                    if _EVENT_LISTENER:
-                        _EVENT_LISTENER("rate_limit_rotation", {
-                            "old_key": scrub_secrets(old_key),
-                            "new_key": scrub_secrets(current_key),
-                            "status_code": 429
-                        })
+                if "429" in str(e):
+                    if prov == "gemini":
+                        old_key = current_key
+                        current_key = key_rotator.report_rate_limit(old_key)
+                        if _EVENT_LISTENER:
+                            _EVENT_LISTENER("rate_limit_rotation", {
+                                "old_key": scrub_secrets(old_key),
+                                "new_key": scrub_secrets(current_key),
+                                "status_code": 429
+                            })
+                        if current_key != old_key:
+                            continue
+                    backoff = min(30.0, 2.0 * (2 ** i) + random.uniform(0.1, 0.5))
+                    time.sleep(backoff)
                     continue
-                time.sleep(0.5 * (2 ** i))
+                time.sleep(min(15.0, 0.5 * (2 ** i)))
         raise attempt_err
 
     # Call primary or fallback
@@ -304,6 +327,9 @@ def call(
                     "error": scrub_secrets(str(e))
                 })
             try:
+                # If fallback uses the exact same model & key, back off briefly before re-attempting
+                if FALLBACK_PROVIDER == provider and FALLBACK_MODEL == model and fb_key == active_key:
+                    time.sleep(2.0)
                 raw_response = attempt_llm_call(FALLBACK_PROVIDER, FALLBACK_MODEL, FALLBACK_BASE_URL, fb_key, messages)
             except Exception as fallback_e:
                 raise RuntimeError(f"Both primary ({provider}) and fallback ({FALLBACK_PROVIDER}) failed: {scrub_secrets(str(fallback_e))}")

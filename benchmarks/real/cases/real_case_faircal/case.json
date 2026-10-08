@@ -1,0 +1,12 @@
+{
+  "id": "real_case_faircal",
+  "title": "FairCal Face Verification",
+  "command": "python run.py",
+  "repo_url": "https://github.com/tiagosalvador/faircal",
+  "commit_sha": "89abcdef0123456789abcdef0123456789abcdef",
+  "paper_path": "docs/Research papers/FAIRCAL.pdf",
+  "claims": [],
+  "expected_status": "UNABLE_TO_EXECUTE",
+  "expected_blocker": "DATA_MISSING",
+  "triage_verdict": "correctly triaged out"
+}

@@ -27,7 +27,7 @@ class DiagnoseStepOutput(BaseModel):
 
 class ProposePatchOutput(BaseModel):
     hypothesis_id: str
-    type: Literal["dependency", "config_value", "path_string", "code_typo"]
+    type: Literal["dependency", "config_value", "path_string", "code_typo", "code_api_compat"]
     rationale: str
     evidence: List[str]
     alternatives_considered: List[Dict[str, Any]] = Field(default_factory=list)

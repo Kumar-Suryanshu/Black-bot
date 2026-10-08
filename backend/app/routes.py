@@ -719,4 +719,25 @@ def global_kill_switch():
     sandbox.manager.kill_all_rerun_containers()
     return {"status": "all_containers_and_workers_terminated"}
 
+@router.get("/api/projects/{id}/kit")
+def download_reproduction_kit(id: str):
+    """
+    Downloads self-contained reproduction kit ZIP archive (§R7):
+    patches/*.diff, reproduce.md, results/, logs/, report.md/html, evidence_index.json.
+    """
+    state = get_project_state("data/rerun.db", id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    from tools.kit import build_reproduction_kit
+    zip_bytes = build_reproduction_kit(state)
+
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="rerun_kit_{id}.zip"'
+        }
+    )
+
 
