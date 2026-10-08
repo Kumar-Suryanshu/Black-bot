@@ -20,14 +20,6 @@ from tests.agent.fakes import (
     get_fake_script_b4_combined,
 )
 
-def run_case_headless(case_id: str, auto_approve: bool = True, use_fake_llm: bool = True):
-    case_aliases = {
-        "b1": "b1_control",
-        "b2": "b2_dependency",
-        "b3": "b3_silent_config",
-        "b4": "b4_combined",
-        "b5": "b5_unable",
-    }
 def get_headless_script_b2() -> list:
     return [
         ("solver", "extract_claims", {
@@ -168,10 +160,16 @@ def run_case_headless(case_id: str, auto_approve: bool = True, use_fake_llm: boo
         "paper_path": "benchmarks/papers/digits_softmax.pdf"
     }
 
+    from agent.loop import get_sandbox
+    sandbox_name = type(get_sandbox()).__name__
+    is_real = sandbox_name == "DockerSandbox"
+
     print(f"\n========================================================")
     print(f"🚀 Starting headless run for case '{case_id}'")
     print(f"   Project ID: {project_id}")
-    print(f"   Sandbox: DockerSandbox (real container)")
+    # Previously hardcoded as "DockerSandbox (real container)" regardless of SANDBOX_TYPE.
+    print(f"   Sandbox: {sandbox_name} ({'real container' if is_real else 'SIMULATED, not a real container'})")
+    print(f"   LLM: {'scripted FakeLLM' if use_fake_llm else 'live provider'}")
     print(f"========================================================")
 
     step_counter = 0
@@ -188,7 +186,9 @@ def run_case_headless(case_id: str, auto_approve: bool = True, use_fake_llm: boo
                 state.command_confirmed = True
                 state.pending = None
             elif kind == "approval":
-                patch = state.patches[-1]
+                # The patch the gate actually asked about, not merely the most recent one.
+                pending_patch_id = state.pending.get("patch_id")
+                patch = next((pp for pp in state.patches if pp.id == pending_patch_id), state.patches[-1])
                 print(f"⚖️ Patch proposed: {patch.id} ({patch.type}). Auto-approving...")
                 appr = Approval(
                     id=f"appr_{uuid.uuid4().hex[:6]}",

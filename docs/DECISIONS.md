@@ -65,3 +65,33 @@
 - This decoupling allows third-party auditors to verify reproductions in clean Docker containers without AI dependency or agent installation.
 
 
+
+## 8. Critic Scope: Packet Review, Not Independent Fetching (defect remediation)
+- **Designed behaviour**: `agent/critic/schemas.py` describes a Critic that can take up to three
+  read-only fetches of its own (`CriticPatchReviewOutput.action`), re-deriving facts from
+  artifacts it chooses rather than only those the Solver cited.
+- **Actual behaviour**: that loop was never implemented. `review_patch` makes a single call and
+  judges only `build_review_packet`'s contents: the patch, its diff, the cited evidence slices,
+  the paper settings and the config diff. The `fetches_left = 3` local was dead code and has
+  been removed.
+- **Decision**: keep the single-call review for now and record the gap here rather than leaving
+  the schema imply a capability that does not exist. Implementing independent Critic tool use is
+  a feature, not a defect fix, and was explicitly left out of the remediation branch.
+- **Consequence to be aware of**: the Critic cannot discover evidence the Solver chose not to
+  cite. Its independence is therefore limited to re-judging the cited material against policy
+  and the paper settings. The deterministic quote check in `review_patch` and the code-enforced
+  verdict override in `agent/critic/review.py` remain the real guarantees.
+- **Related hardening applied**: the review call now returns a judgment-only schema
+  (`CriticJudgement`). `id`, `patch_id`, `round` and `model` are set by code, because `model`
+  carrying the value `"unavailable"` is the Arbiter's signal that no independent review
+  happened (`agent/arbiter.py`), and a reviewer must not be able to assert that about itself.
+
+## 9. Simulation Provenance (defect remediation)
+- **Decision**: `state.simulated` is set during `INGEST` whenever the resolved sandbox is not
+  `DockerSandbox`. It was previously declared and read, but never written, so the report's
+  "SIMULATED RUN" banner and the dashboard indicator were unreachable and a fake-sandbox run
+  produced a report indistinguishable from a real containerised one.
+- **Consequence**: any run under `SANDBOX_TYPE=fake` now carries the banner in `report.md`,
+  `report.html` and the UI. `benchmarks/run_bench.py` stamps the LLM mode and sandbox type into
+  `benchmarks/MEASURED.md` for the same reason: its Rerun rows are produced with scripted LLM
+  replies by default and measure the orchestrator, not a model.

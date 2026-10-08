@@ -3,7 +3,8 @@ from pathlib import Path
 
 from agent.state import ProjectState, PatchProposal, CriticReview
 from agent.llm import call as default_llm_call
-from .schemas import CriticPatchReviewOutput
+from .schemas import CriticJudgement
+from .prompts import CRITIC_PATCH_REVIEW_PROMPT
 
 ALL_CHECKLIST_KEYS = [
     "cause_is_cited_and_exists",
@@ -24,6 +25,17 @@ CRITICAL_CHECKS = [
     "no_change_to_evaluation_or_data_semantics",
     "value_has_paper_or_error_provenance"
 ]
+
+def _active_critic_model() -> str:
+    """
+    Identifies the model that actually produced the review, for the record. "unavailable" is
+    reserved for the failure path below and is never supplied by the model itself.
+    """
+    import agent.llm as llm
+    if getattr(llm, "_ACTIVE_FAKE_LLM", None) is not None:
+        return "fake"
+    from agent.config import CRITIC_MODEL
+    return CRITIC_MODEL or "unknown"
 
 def build_review_packet(state: ProjectState, patch: PatchProposal, workspace: Optional[str] = None) -> Dict[str, Any]:
     """Constructs the raw review packet for the Critic."""
@@ -75,14 +87,27 @@ def review_patch(
     """
     call_fn = llm_call_fn or default_llm_call
     packet = build_review_packet(state, patch)
-    
-    # Mode patch_review
-    review_output = None
-    fetches_left = 3
-    
+
     try:
-        review_model = call_fn("critic", "patch_review", packet, CriticReview)
-        review = review_model
+        # The model returns only its judgment; identity and provenance are set here so a
+        # reviewer cannot report its own round number or claim to be "unavailable".
+        judgement = call_fn(
+            "critic", "patch_review", packet, CriticJudgement,
+            task_prompt=CRITIC_PATCH_REVIEW_PROMPT
+        )
+        review = CriticReview(
+            id=f"R-{len(state.critic_reviews) + 1}",
+            patch_id=patch.id,
+            round=round_num,
+            verdict=judgement.verdict,
+            checks=dict(judgement.checks),
+            verified_evidence=list(judgement.verified_evidence),
+            objections=list(judgement.objections),
+            required_changes=list(judgement.required_changes),
+            confidence=judgement.confidence,
+            model=_active_critic_model(),
+        )
+        # An omitted check is a failed check.
         for k in ALL_CHECKLIST_KEYS:
             if k not in review.checks:
                 review.checks[k] = False

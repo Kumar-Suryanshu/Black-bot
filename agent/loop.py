@@ -41,6 +41,7 @@ from tools.preflight import preflight_check
 from tools.exec_tools import query_package_index
 from tools.report import generate_report
 from agent.critic.schemas import ReportReviewOutput
+from agent.critic.prompts import CRITIC_REPORT_REVIEW_PROMPT
 
 # Re-export FakeSandbox for backward compatibility with existing tests
 from sandbox.fake import FakeSandbox
@@ -142,6 +143,20 @@ def guard_budgets(state: ProjectState) -> bool:
 
 def handle_ingest(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
+
+    # Record whether this run is really containerised. state.simulated was declared and read
+    # by the report generator and the UI but never set, so the "SIMULATED RUN" banner was
+    # unreachable and a fake-sandbox run could emit a REPRODUCED verdict indistinguishable
+    # from a real one.
+    sandbox = deps.get("sandbox") or get_sandbox()
+    is_real_container = type(sandbox).__name__ == "DockerSandbox"
+    state.simulated = not is_real_container
+    if state.simulated:
+        emit_event(
+            state, "system", "simulated_run",
+            f"Run is SIMULATED: sandbox is {type(sandbox).__name__}, not a real container"
+        )
+
     ws_path = state.workspace or deps.get("workspace", f"data/runs/{state.project_id}/workspace")
     state.workspace = ws_path
     deps["workspace"] = ws_path
@@ -199,7 +214,8 @@ def handle_analyze(state: ProjectState, deps: dict):
             "solver", "extract_claims",
             {"paper_text": prompt_paper_text},
             ExtractClaimsOutput,
-            benchmark_id=state.benchmark_id
+            benchmark_id=state.benchmark_id,
+            task_prompt=EXTRACT_CLAIMS_PROMPT
         )
         # Filter quotes against full paper text and extracted tables (R5)
         verified_claims = []
@@ -263,7 +279,8 @@ def handle_plan(state: ProjectState, deps: dict):
             "solver", "plan_experiment",
             {"claims": [c.model_dump() for c in state.claims], "repo_profile": state.repo_profile},
             PlanExperimentOutput,
-            benchmark_id=state.benchmark_id
+            benchmark_id=state.benchmark_id,
+            task_prompt=PLAN_EXPERIMENT_PROMPT
         )
         state.plan = Plan(
             command=plan_out.command,
@@ -571,7 +588,8 @@ def handle_diagnose(state: ProjectState, deps: dict):
                 ]
             },
             DiagnoseStepOutput,
-            benchmark_id=state.benchmark_id
+            benchmark_id=state.benchmark_id,
+            task_prompt=DIAGNOSE_STEP_PROMPT
         )
         
         # §7.3: Updates hypotheses only if every evidence ID exists in the ledger
@@ -707,7 +725,8 @@ def handle_patch_propose(state: ProjectState, deps: dict):
                 "failed_fixes": state.failed_fixes
             },
             ProposePatchOutput,
-            benchmark_id=state.benchmark_id
+            benchmark_id=state.benchmark_id,
+            task_prompt=PROPOSE_PATCH_PROMPT
         )
         
         if not patch_out.edits:
@@ -907,7 +926,8 @@ def handle_report(state: ProjectState, deps: dict):
                 "unresolved_issues": state.unresolved_issues
             },
             WriteReportOutput,
-            benchmark_id=state.benchmark_id
+            benchmark_id=state.benchmark_id,
+            task_prompt=WRITE_REPORT_PROMPT
         )
         if rep_out and hasattr(rep_out, "statements"):
             raw_statements = rep_out.statements
@@ -939,7 +959,8 @@ def handle_report_review(state: ProjectState, deps: dict):
                 "critic", "report_review",
                 {"statements": raw_stmts},
                 ReportReviewOutput,
-                benchmark_id=state.benchmark_id
+                benchmark_id=state.benchmark_id,
+                task_prompt=CRITIC_REPORT_REVIEW_PROMPT
             )
             if rev_out and hasattr(rev_out, "flags") and state.final and "report" in state.final:
                 state.final["report"]["critic_flags"] = [f.model_dump() for f in rev_out.flags]

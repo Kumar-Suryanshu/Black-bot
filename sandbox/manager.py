@@ -163,26 +163,51 @@ def build_container_spec(project_id: str, workspace: Path, is_setup: bool, comma
             
     return spec
 
+def _make_tree_group_writable(root: Path) -> None:
+    """
+    Grants read/write (and traverse, for directories) to the whole tree so the container's
+    uid 1000 can use the bind mount. Pure os.chmod over a walk: no shell, so paths containing
+    spaces or shell metacharacters are handled correctly.
+    """
+    import stat
+
+    file_bits = stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IWGRP | stat.S_IROTH | stat.S_IWOTH
+    dir_bits = file_bits | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+
+    try:
+        os.chmod(root, dir_bits)
+    except Exception:
+        pass
+    for dirpath, dirnames, filenames in os.walk(root):
+        for name in dirnames:
+            try:
+                os.chmod(os.path.join(dirpath, name), dir_bits)
+            except Exception:
+                pass
+        for name in filenames:
+            try:
+                target = os.path.join(dirpath, name)
+                # Preserve the executable bit where it is already set (entry-point scripts).
+                current = os.stat(target).st_mode
+                bits = file_bits
+                if current & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH):
+                    bits |= stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+                os.chmod(target, bits)
+            except Exception:
+                pass
+
 def run_container(project_id: str, workspace: Path, is_setup: bool, command: str, kind: str, n: int, python_image: str = "rerun-base:py311", run_timeout_override: Optional[int] = None) -> RunResult:
     limits = get_limits()
     client = docker.from_env()
     
-    # 1. Create workspace output dir and log file
-    # Note: On Windows (Docker Desktop), permissions are mostly inherited. The prompt advises a+rwX,
-    # which we can attempt naively for standard POSIX if running on WSL/Linux, but Windows won't mind it missing.
-    try:
-        if sys.platform != "win32":
-            os.system(f"chmod -R a+rwX {workspace.absolute()}")
-    except Exception:
-        pass
-        
+    # 1. Create workspace output dir and log file.
+    # The container runs as uid 1000, so the bind-mounted workspace must be writable by it.
+    # This used to shell out via os.system with an interpolated, unquoted path, which breaks
+    # on any path containing a space and passes the path through a shell for no reason.
     outputs_dir = workspace / "outputs"
     outputs_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        if sys.platform != "win32":
-            os.system(f"chmod -R a+rwX {outputs_dir.absolute()}")
-    except Exception:
-        pass
+    if sys.platform != "win32":
+        _make_tree_group_writable(workspace)
 
     log_dir = Path("data") / "runs" / project_id / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)

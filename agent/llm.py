@@ -175,14 +175,24 @@ def call(
     payload: dict,
     out_model: Type[BaseModel],
     benchmark_id: str = "default",
-    max_retries: int = 3
+    max_retries: int = 3,
+    task_prompt: Optional[str] = None
 ) -> BaseModel:
     """
     Main entry point for LLM interactions in Rerun.
     Enforces preambles, untrusted wrapping, JSON validation, re-prompt on invalid JSON,
     cassettes, secret scrubbing, and provider fallback.
+
+    `task_prompt` carries the mode's own instructions (agent/solver/prompts.py,
+    agent/critic/prompts.py). Without it the model received only the role preamble, the JSON
+    schema and "Mode: <name>", leaving it to infer the task from the mode name alone.
+
+    It is appended to the SYSTEM message on purpose: the user message stays byte-identical, so
+    cassette keys (role|mode|payload|model) and the FakeLLM "Mode:" assertion are unaffected.
     """
     system_preamble = SOLVER_PREAMBLE if role == "solver" else CRITIC_PREAMBLE
+    if task_prompt:
+        system_preamble += f"\n\nTask for this call ({mode}):\n{task_prompt.strip()}"
     schema_str = json.dumps(out_model.model_json_schema(), indent=2)
     system_preamble += f"\n\nYou must return a valid JSON object strictly conforming to this JSON Schema:\n{schema_str}"
     user_prompt = f"Mode: {mode}\nPayload:\n{json.dumps(wrap_untrusted(payload), indent=2)}"
