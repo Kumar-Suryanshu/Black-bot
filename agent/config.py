@@ -35,19 +35,45 @@ FALLBACK_API_KEY = os.getenv("FALLBACK_API_KEY", "")
 CASSETTE_DIR = os.getenv("CASSETTE_DIR", "data/cassettes")
 LLM_MODE = os.getenv("LLM_MODE", "live")  # live | record | replay
 
+# Multi-Key Rotation Pool
+def parse_api_keys(raw: str) -> list[str]:
+    if not raw:
+        return []
+    keys = []
+    for item in raw.split(","):
+        k = item.strip()
+        if k and not k.startswith("PLACEHOLDER_") and len(k) > 5:
+            keys.append(k)
+    return keys
+
+GEMINI_API_KEYS = parse_api_keys(os.getenv("GEMINI_API_KEYS", ""))
+if not GEMINI_API_KEYS and SOLVER_API_KEY and not SOLVER_API_KEY.startswith("PLACEHOLDER_") and len(SOLVER_API_KEY) > 5:
+    GEMINI_API_KEYS = [SOLVER_API_KEY]
+
+KEY_ROTATION_THRESHOLD = int(os.getenv("KEY_ROTATION_THRESHOLD", "100"))
+
 SECRET_PATTERNS = [
     r"sk-[a-zA-Z0-9_\-]{20,}",
     r"ghp_[a-zA-Z0-9]{20,}",
+    r"AIza[0-9A-Za-z\-_]{20,}",
     r"(?i)(?:api_key|apikey|secret|password|token)\s*[:=]\s*['\"]?([a-zA-Z0-9_\-\.]{8,})['\"]?"
 ]
+
+DYNAMIC_SECRET_KEYS = set()
+
+def register_secret_keys(keys_list):
+    """Dynamically register secret keys to be masked by scrub_secrets."""
+    for k in keys_list:
+        if k and len(k) > 4:
+            DYNAMIC_SECRET_KEYS.add(k)
 
 def scrub_secrets(text: str) -> str:
     """Scrub potential secrets, API keys, and sensitive tokens from strings."""
     if not isinstance(text, str):
         return text
     scrubbed = text
-    # Known key values in env
-    keys_to_mask = [SOLVER_API_KEY, CRITIC_API_KEY, FALLBACK_API_KEY]
+    # Known key values in env & multi-key pool & dynamically registered keys
+    keys_to_mask = list(set([SOLVER_API_KEY, CRITIC_API_KEY, FALLBACK_API_KEY] + GEMINI_API_KEYS + list(DYNAMIC_SECRET_KEYS)))
     for k in keys_to_mask:
         if k and len(k) > 4:
             scrubbed = scrubbed.replace(k, "[REDACTED_API_KEY]")

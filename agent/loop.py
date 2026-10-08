@@ -16,6 +16,7 @@ from agent.config import (
 )
 from agent.events import emit_event
 from agent.llm import call as llm_call
+from agent.key_rotator import key_rotator
 from agent.solver.schemas import (
     ExtractClaimsOutput, PlanExperimentOutput, DiagnoseStepOutput,
     ProposePatchOutput, WriteReportOutput
@@ -754,6 +755,11 @@ def run_project(state: ProjectState, deps: Optional[dict] = None):
         handler = PHASE_HANDLERS.get(state.phase)
         if not handler:
             break
-        handler(state, deps_dict)
+        current_phase = state.phase
+        key_rotator.begin_task(f"phase_{current_phase}")
+        try:
+            handler(state, deps_dict)
+        finally:
+            key_rotator.end_task()
         if state.pending:
             return  # Paused for human approval or claim confirmation

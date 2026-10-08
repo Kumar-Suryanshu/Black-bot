@@ -39,11 +39,25 @@
 - [x] **Stage 11**: Report — *Owner: Track A (generation) + Track B+D (rendering)*
   - *Gate Run Results:* PASS (`pytest tests/unit/test_report_verifier.py` passed; `tools/report.py` implemented with placeholder resolution, deterministic verifier V1–V7, unpatched vs final runs comparison for frontend `ReportChart`, Markdown & HTML exports, and `/api/projects/{id}/report[.md|.html]` endpoints; certified reproduction report interactive rendering at `/p/:id/report` with baseline comparison charts, patch provenance with Critic checklist, config audits, and limitation disclosures).
 - [ ] **Stage 12**: Evaluation sweep — *Owner: TBD (Track C)*
-- [ ] **Stage 13**: Hardening & fallbacks — *Owner: TBD (Track B+D)*
+- [x] **Stage 13**: Hardening & fallbacks — *Owner: Track B+D*
+  - *Gate Run Results:* PASS (Multi-key Gemini API rotation engine `agent/key_rotator.py` implemented; task-boundary aware soft threshold at ~100 requests/key; emergency 429 failover with 60s cooldown; UTC daily quota reset; Invariant I4 secret scrubbing across all keys; `/api/keys/stats` diagnostic route; `tests/unit/test_key_rotator.py` passing with 9/9 tests; full suite passing 75 tests).
 - [ ] **Stage 14**: Docs & demo kit — *Owner: All*
 
 ## Checkpoint Reports
 *(Updated after Stages 3, 7, 10, 11, and 13)*
+
+### After Stage 13 (Multi-Key Gemini API Rotation Engine Complete)
+- **What works:**
+  - **Task-Boundary-Aware Key Rotator (`agent/key_rotator.py`)**:
+    - Manages multi-account API key pools (`GEMINI_API_KEYS` in `.env`).
+    - Enforces soft rotation thresholds (`KEY_ROTATION_THRESHOLD`, default 100 requests) so key switching never occurs mid-task/mid-phase.
+    - Preserves in-flight task continuity: keys that cross the threshold during an atomic phase continue until `end_task()`, after which the rotator cycles round-robin to the next account.
+    - Automatic 429 rate limit failover: marks exhausted keys with a 60-second cooldown and retries instantly with the next available key.
+    - Automated UTC midnight reset for daily request quotas.
+    - Thread-safe singleton with persistent tracking in `data/key_stats.json`.
+  - **Secret Scrubbing & Invariant I4 Protection**: All keys in the rotation pool and Gemini regex patterns are automatically registered and scrubbed (`[REDACTED_API_KEY]`) across all logs, tool outputs, and LLM diagnostics.
+  - **API Key Diagnostic Route**: `/api/keys/stats` returns real-time key usage, active index, cooldown states, and masked key identifiers.
+  - **Full Test Suite Validation**: 75 passed, 3 skipped (Docker), 0 failed.
 
 ### After Stage 11 (Report Generation & Verification Engine Complete)
 - **What works:**

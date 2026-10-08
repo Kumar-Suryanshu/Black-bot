@@ -14,6 +14,7 @@ from .config import (
     FALLBACK_PROVIDER, FALLBACK_MODEL, FALLBACK_BASE_URL, FALLBACK_API_KEY,
     CASSETTE_DIR, LLM_MODE, scrub_secrets
 )
+from .key_rotator import key_rotator
 
 class LLMOutputInvalid(Exception):
     """Raised when LLM output fails schema validation even after re-prompting."""
@@ -187,12 +188,12 @@ def call(
         provider = SOLVER_PROVIDER
         model = SOLVER_MODEL
         base_url = SOLVER_BASE_URL
-        api_key = SOLVER_API_KEY
+        api_key = key_rotator.get_active_key(role) if provider == "gemini" else SOLVER_API_KEY
     else:
         provider = CRITIC_PROVIDER
         model = CRITIC_MODEL
         base_url = CRITIC_BASE_URL
-        api_key = CRITIC_API_KEY
+        api_key = key_rotator.get_active_key(role) if provider == "gemini" else CRITIC_API_KEY
         
     if _ACTIVE_FAKE_LLM is not None:
         provider = "fake"
@@ -226,26 +227,58 @@ def call(
         {"role": "user", "content": user_prompt}
     ]
 
-    def attempt_llm_call(prov, mod, b_url, key):
+    active_key = api_key
+
+    def attempt_llm_call(prov, mod, b_url, key, msgs):
+        nonlocal active_key
+        current_key = key
         attempt_err = None
         for i in range(max_retries + 1):
             try:
                 t0 = time.time()
-                resp_text = execute_provider_request(prov, mod, b_url, key, messages)
+                resp_text = execute_provider_request(prov, mod, b_url, current_key, msgs)
                 _ = time.time() - t0
+                if prov == "gemini" and current_key:
+                    key_rotator.record_success(current_key)
+                active_key = current_key
                 return resp_text
+            except httpx.HTTPStatusError as e:
+                attempt_err = e
+                status_code = e.response.status_code if e.response is not None else 0
+                if prov == "gemini" and status_code == 429:
+                    old_key = current_key
+                    current_key = key_rotator.report_rate_limit(old_key)
+                    if _EVENT_LISTENER:
+                        _EVENT_LISTENER("rate_limit_rotation", {
+                            "old_key": scrub_secrets(old_key),
+                            "new_key": scrub_secrets(current_key),
+                            "status_code": 429
+                        })
+                    continue
+                time.sleep(0.5 * (2 ** i))
             except Exception as e:
                 attempt_err = e
+                if prov == "gemini" and "429" in str(e):
+                    old_key = current_key
+                    current_key = key_rotator.report_rate_limit(old_key)
+                    if _EVENT_LISTENER:
+                        _EVENT_LISTENER("rate_limit_rotation", {
+                            "old_key": scrub_secrets(old_key),
+                            "new_key": scrub_secrets(current_key),
+                            "status_code": 429
+                        })
+                    continue
                 time.sleep(0.5 * (2 ** i))
         raise attempt_err
 
     # Call primary or fallback
     raw_response = None
     try:
-        raw_response = attempt_llm_call(provider, model, base_url, api_key)
+        raw_response = attempt_llm_call(provider, model, base_url, active_key, messages)
     except Exception as e:
         if provider != "fake":
             # Try fallback provider
+            fb_key = key_rotator.get_active_key(role) if FALLBACK_PROVIDER == "gemini" else FALLBACK_API_KEY
             if _EVENT_LISTENER:
                 _EVENT_LISTENER("llm_fallback", {
                     "from_provider": provider,
@@ -253,7 +286,7 @@ def call(
                     "error": scrub_secrets(str(e))
                 })
             try:
-                raw_response = attempt_llm_call(FALLBACK_PROVIDER, FALLBACK_MODEL, FALLBACK_BASE_URL, FALLBACK_API_KEY)
+                raw_response = attempt_llm_call(FALLBACK_PROVIDER, FALLBACK_MODEL, FALLBACK_BASE_URL, fb_key, messages)
             except Exception as fallback_e:
                 raise RuntimeError(f"Both primary ({provider}) and fallback ({FALLBACK_PROVIDER}) failed: {scrub_secrets(str(fallback_e))}")
         else:
@@ -274,7 +307,7 @@ def call(
             "content": f"Your response was invalid. Error: {str(parse_err)}. Please provide the corrected JSON object strictly matching the schema."
         })
         try:
-            fixed_response = execute_provider_request(provider, model, base_url, api_key, correction_messages)
+            fixed_response = attempt_llm_call(provider, model, base_url, active_key, correction_messages)
             fixed_dict = extract_json(fixed_response)
             validated_obj = out_model.model_validate(fixed_dict)
             final_response_text = fixed_response

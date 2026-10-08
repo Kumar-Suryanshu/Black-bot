@@ -290,3 +290,10 @@ def abort_project(id: str):
     state.pending = None
     save_project_state("data/rerun.db", id, state.benchmark_id, state.repo_commit, "INCONCLUSIVE", state)
     return {"status": "aborted"}
+
+@router.get("/api/keys/stats")
+def get_key_stats():
+    """Returns real-time usage statistics and rotation status for all API keys in the pool."""
+    from agent.key_rotator import key_rotator
+    return key_rotator.get_stats()
+
