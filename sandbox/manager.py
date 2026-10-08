@@ -98,12 +98,13 @@ def probe_gpu() -> dict:
     except Exception as e:
         return {"usable": False, "reason": f"GPU probe failed: {str(e)}", "count": 0}
 
-def build_container_spec(project_id: str, workspace: Path, is_setup: bool, command: str) -> dict:
+def build_container_spec(project_id: str, workspace: Path, is_setup: bool, command: str, python_image: str = "rerun-base:py311") -> dict:
     limits = get_limits()
     wheelhouse = Path("wheelhouse").absolute()
+    project_whl = Path(f"data/runs/{project_id}/wheelhouse").absolute()
     
     spec = dict(
-        image="rerun-base:py311",
+        image=python_image,
         detach=True,
         user="1000:1000",
         network_mode="none",
@@ -114,7 +115,7 @@ def build_container_spec(project_id: str, workspace: Path, is_setup: bool, comma
         mem_limit=limits.mem,
         memswap_limit=limits.mem,
         nano_cpus=int(limits.cpus * 1e9),
-        tmpfs={"/tmp": "rw,size=256m"},
+        tmpfs={"/tmp": f"rw,size={'1024m' if is_setup else os.getenv('SANDBOX_TMP_SIZE', '256m')}"},
         working_dir="/workspace",
         environment={
             "HOME": "/tmp",
@@ -135,7 +136,22 @@ def build_container_spec(project_id: str, workspace: Path, is_setup: bool, comma
     
     if is_setup:
         spec["volumes"][str(wheelhouse)] = {"bind": "/wheelhouse", "mode": "ro"}
-        spec["command"] = ["pip", "install", "--no-index", "--find-links", "/wheelhouse", "--target", "/workspace/.site", "-r", "requirements.txt"]
+        find_links = ["--find-links", "/wheelhouse"]
+        if project_whl.exists():
+            spec["volumes"][str(project_whl)] = {"bind": "/wheelhouse_proj", "mode": "ro"}
+            find_links.extend(["--find-links", "/wheelhouse_proj"])
+
+        req_arg = ["-r", "requirements.txt"]
+        if not (workspace / "requirements.txt").exists():
+            matching_reqs = list(workspace.glob("requirements*.txt"))
+            if matching_reqs:
+                req_arg = ["-r", matching_reqs[0].name]
+            elif (project_whl / "requirements.provision.txt").exists():
+                req_arg = ["-r", "/wheelhouse_proj/requirements.provision.txt"]
+            else:
+                req_arg = []
+
+        spec["command"] = ["pip", "install", "--no-index"] + find_links + ["--target", "/workspace/.site"] + req_arg
     else:
         spec["command"] = shlex.split(command)
 
@@ -147,7 +163,7 @@ def build_container_spec(project_id: str, workspace: Path, is_setup: bool, comma
             
     return spec
 
-def run_container(project_id: str, workspace: Path, is_setup: bool, command: str, kind: str, n: int) -> RunResult:
+def run_container(project_id: str, workspace: Path, is_setup: bool, command: str, kind: str, n: int, python_image: str = "rerun-base:py311") -> RunResult:
     limits = get_limits()
     client = docker.from_env()
     
@@ -173,7 +189,7 @@ def run_container(project_id: str, workspace: Path, is_setup: bool, command: str
     log_path = log_dir / f"{kind}_{n}.log"
 
     # 2. Build spec and run
-    spec = build_container_spec(project_id, workspace, is_setup, command)
+    spec = build_container_spec(project_id, workspace, is_setup, command, python_image=python_image)
     container_name = f"rerun_{project_id}_{kind}_{n}"
     try:
         existing = client.containers.get(container_name)

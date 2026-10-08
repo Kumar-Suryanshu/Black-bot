@@ -30,3 +30,8 @@ class HealthResponse(BaseModel):
     llm_primary: bool
     llm_fallback: bool
 
+class ProvisioningApproveRequest(BaseModel):
+    packages: Optional[List[str]] = None
+    confirm: bool = True
+
+

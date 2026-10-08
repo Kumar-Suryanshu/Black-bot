@@ -157,6 +157,8 @@ class ProjectState(BaseModel):
     silent_divergence: bool = False
     active_container_name: str | None = None
     abort_requested: bool = False
+    provisioning_plan: dict | None = None
+    provisioning_approved: bool = False
     pending: dict | None = None
     final: dict | None = None
 

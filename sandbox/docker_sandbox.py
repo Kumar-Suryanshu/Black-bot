@@ -13,20 +13,25 @@ class DockerSandbox:
     def execute(self, state: ProjectState, workspace: str, command: str, kind: str, n: int) -> RunResult:
         """Run an experiment execution container (isolated, offline, CPU/mem/PID capped)."""
         ws = Path(workspace)
+        python_image = "rerun-base:py311"
+        if getattr(state, "provisioning_plan", None) and isinstance(state.provisioning_plan, dict):
+            python_image = state.provisioning_plan.get("python_image", "rerun-base:py311")
         return run_container(
             project_id=state.project_id,
             workspace=ws,
             is_setup=False,
             command=command,
             kind=kind,
-            n=n
+            n=n,
+            python_image=python_image
         )
 
     def install(self, state: ProjectState, workspace: str, n: int = 1) -> Tuple[Optional[int], str, RunResult]:
         """Run a setup container mounting the offline wheelhouse to install dependencies."""
         ws = Path(workspace)
-        req_file = ws / "requirements.txt"
-        if not req_file.exists():
+        project_whl = Path(f"data/runs/{state.project_id}/wheelhouse")
+        has_req = any(ws.glob("requirements*.txt")) or (project_whl / "requirements.provision.txt").exists()
+        if not has_req and not (ws / "pyproject.toml").exists() and not (ws / "setup.cfg").exists():
             dummy = RunResult(
                 exit_code=0,
                 timed_out=False,
@@ -37,12 +42,18 @@ class DockerSandbox:
             )
             return 0, "", dummy
 
+        python_image = "rerun-base:py311"
+        if getattr(state, "provisioning_plan", None) and isinstance(state.provisioning_plan, dict):
+            python_image = state.provisioning_plan.get("python_image", "rerun-base:py311")
+
         res = run_container(
             project_id=state.project_id,
             workspace=ws,
             is_setup=True,
             command="",
             kind="setup",
-            n=n
+            n=n,
+            python_image=python_image
         )
         return res.exit_code, res.log_path, res
+

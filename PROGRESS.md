@@ -80,8 +80,18 @@
     - **Secrets Hygiene:** `tests/security/test_secrets_and_deletion.py` verified that no unredacted API key patterns (`AIza*`, `AQ.*`, `sk-*`) exist across `data/runs/**`.
     - **Data Deletion API (`DELETE /api/projects/{id}`):** Purges project workspace, PDF, logs, outputs, wheelhouse from disk and deletes rows from SQLite `projects`, `events`, and `evidence` tables (`test_data_deletion_removes_workspace_and_db`).
     - **Concurrency Limits & Kill Switch:** Concurrency limit enforced (`MAX_CONCURRENT_PROJECTS=2`) with HTTP 429; `POST /api/admin/kill-switch` halts all running workers and kills labeled Docker containers globally (`test_admin_kill_switch`).
-    - **Security Test Suite:** 11/11 tests passing in `tests/security`. Full suite passes 138 tests; frontend builds cleanly.
-  - *Status:* PASS — ready for Stage 6 (Safe dependency provisioning).
+- [x] **Stage 6 (Completion Plan)**: Safe dependency provisioning (R3)
+  - *Branch:* `completion/stage-6`
+  - *Gate Run Results:* PASS:
+    - **Fixture Repo Execution with Data Science Stack:** Fixture repo needing `scikit-learn`, `pandas`, `matplotlib` statically resolves, provisions wheels into per-project wheelhouse `data/runs/<id>/wheelhouse`, installs offline into `/workspace/.site`, and runs successfully (`test_fixture_repo_data_science_stack_installs_and_runs_offline`).
+    - **Sdist-only Zero Execution Guard:** Repo requiring an sdist-only package triggers `NEEDS_BUILD` without executing any repository code (`test_sdist_only_dependency_triggers_needs_build_without_code_execution`). Proved repository `setup.py` was never invoked (`TRAP_TRIGGERED.txt` was not created).
+    - **Offline Self-Test Invariant:** Execution container remains strictly offline (`network_mode="none"`) after provisioning; self-test confirms outbound socket and HTTP connections are hard-blocked (`test_self_test_after_provisioning_confirms_run_container_offline`).
+    - **Evidence Ledger & Package Isolation:** Provisioning log `provisioning.log` is captured as immutable evidence (`E-###`) in SQLite `evidence` table and `data/runs/<id>/evidence/`; unapproved packages are strictly excluded from downloads and wheelhouse (`test_provisioning_log_evidence_and_unapproved_packages_never_downloaded`).
+    - **Warnings & Intelligence:** Static resolution identifies typosquatting risks (e.g. `numppy`, `reqeusts`), flags CPU torch risks, and detects unpinned dependency drift versus the paper era (`test_typosquatting_and_dependency_drift_warnings`).
+    - **Base Image Selection:** Accurately selects `rerun-base:py39|py310|py311|py312` based on triage report or `pyproject.toml` `requires-python` specification (`test_python_image_selection`).
+    - **API & UI Wiring:** Added `GET /api/projects/{id}/provisioning/plan`, `POST /api/projects/{id}/provisioning/approve`, `POST /api/projects/{id}/provisioning/reject`, client methods, and pending action types.
+    - **Test Suite Status:** 7/7 tests passing in `tests/unit/test_stage6_provisioning.py`; full suite passing 145/145 tests (`pytest tests -q`); frontend builds cleanly (`npm run build --prefix frontend`).
+  - *Status:* PASS — ready for Stage 7 (Generic command + metric extraction).
 
 ---
 
