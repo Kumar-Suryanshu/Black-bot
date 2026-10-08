@@ -150,35 +150,83 @@ export const Report: React.FC = () => {
 
         {/* SECTION 1: VERIFIED METRIC COMPARISON (RECHARTS BAR CHART) */}
         <section className="bg-[#FAF7F0] border border-[#CDC5B4] rounded-xl p-6 sm:p-8 space-y-6 shadow-sm font-mono text-xs text-[#1F2A44]">
-          <div className="space-y-1.5">
-            <span className="text-rust font-bold uppercase tracking-[0.2em] text-[11px]">
-              1. Computational Metric Verification
-            </span>
-            <h2 className="font-serif text-xl uppercase tracking-wide text-[#1F2A44]">
-              Unpatched vs. Patched Headline Metric
-            </h2>
-            <p className="text-[#4A5470] font-sans text-xs">
-              Both unpatched and final runs are explicitly displayed against the paper's target tolerance band.
-            </p>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1.5">
+              <span className="text-rust font-bold uppercase tracking-[0.2em] text-[11px]">
+                1. Computational Metric Verification
+              </span>
+              <h2 className="font-serif text-xl uppercase tracking-wide text-[#1F2A44]">
+                Unpatched vs. Patched Headline Metric
+              </h2>
+              <p className="text-[#4A5470] font-sans text-xs">
+                Both unpatched and final runs are explicitly displayed against the paper's target tolerance band.
+              </p>
+            </div>
+            <div className="shrink-0 flex items-center gap-2.5 px-3.5 py-2 rounded-lg bg-[#FAF7F0] border border-[#CDC5B4] shadow-sm text-xs font-mono">
+              <span className="text-[#4A5470]">Target Metric:</span>
+              <span className="font-bold text-rust text-sm">{reportedTarget.toFixed(4)}</span>
+              {claim?.tolerance && (
+                <span className="text-[#4A5470] text-[11px] font-semibold">
+                  (±{typeof claim.tolerance === 'object' ? claim.tolerance.value : claim.tolerance})
+                </span>
+              )}
+            </div>
           </div>
 
           {/* Recharts Bar Chart */}
-          <div className="h-64 w-full pt-4">
+          <div className="h-72 w-full pt-4">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData} margin={{ top: 20, right: 30, left: 0, bottom: 5 }}>
+              <BarChart data={chartData} margin={{ top: 32, right: 35, left: 0, bottom: 8 }}>
                 <XAxis dataKey="name" stroke="#78716C" fontSize={11} />
-                <YAxis domain={[0, 1]} stroke="#78716C" fontSize={11} />
+                <YAxis domain={[0, 1.15]} stroke="#78716C" fontSize={11} />
                 <Tooltip
                   contentStyle={{ backgroundColor: '#FAF7F0', borderColor: '#CDC5B4', borderRadius: '6px', color: '#1F2A44', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}
                 />
                 <Legend />
                 <ReferenceLine
                   y={reportedTarget}
-                  label={{ value: `Paper Target: ${reportedTarget}`, fill: '#B45309', fontSize: 11 }}
-                  stroke="#B45309"
-                  strokeDasharray="4 4"
+                  stroke="#B8572F"
+                  strokeDasharray="6 4"
+                  strokeWidth={1.5}
+                  label={(props: any) => {
+                    const { viewBox } = props;
+                    if (!viewBox) return null;
+                    const x = viewBox.x + viewBox.width / 2;
+                    const y = viewBox.y - 14;
+                    return (
+                      <g>
+                        <rect
+                          x={x - 100}
+                          y={y - 12}
+                          width={200}
+                          height={24}
+                          rx={5}
+                          fill="#FAF7F0"
+                          stroke="#B8572F"
+                          strokeWidth={1.5}
+                        />
+                        <text
+                          x={x}
+                          y={y + 4}
+                          textAnchor="middle"
+                          fill="#8F3F20"
+                          fontSize={11}
+                          fontFamily="JetBrains Mono, monospace"
+                          fontWeight="bold"
+                        >
+                          Paper Target: {reportedTarget.toFixed(4)}
+                        </text>
+                      </g>
+                    );
+                  }}
                 />
-                <Bar dataKey="accuracy" fill="#B8572F" name="Observed Accuracy" radius={[4, 4, 0, 0]} />
+                <Bar
+                  dataKey="accuracy"
+                  fill="#B8572F"
+                  name="Observed Accuracy"
+                  radius={[4, 4, 0, 0]}
+                  maxBarSize={90}
+                />
               </BarChart>
             </ResponsiveContainer>
           </div>

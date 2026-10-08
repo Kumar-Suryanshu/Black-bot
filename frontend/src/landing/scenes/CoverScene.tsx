@@ -109,7 +109,7 @@ export const CoverScene: React.FC = () => {
         {/* Eyebrow */}
         <div className="flex items-center gap-3 text-[10px] md:text-xs font-mono uppercase tracking-[0.25em] md:tracking-[0.28em] text-cream/75 mb-3 md:mb-4">
           <span className="w-5 md:w-6 h-[1px] bg-cream/40" />
-          <span>INNOHACKS 4.0 · AGENTIC AI TRACK</span>
+          <span>AUTONOMOUS SCIENTIFIC VERIFICATION</span>
           <span className="w-5 md:w-6 h-[1px] bg-cream/40" />
         </div>
 

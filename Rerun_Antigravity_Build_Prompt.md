@@ -18,7 +18,7 @@ Five owner decisions are built into this document. If any older sentence seems t
 
 ## 0. MISSION
 
-Build **Rerun**, a hackathon-grade but production-minded system that:
+Build **Rerun**, an enterprise-grade and production-minded system that:
 
 1. Takes a **research paper (PDF)** and its **code repository** (from a curated allow-list).
 2. Tries to **reproduce the paper's headline number** by running the repo inside a hardened **Docker sandbox**.

@@ -70,7 +70,7 @@ export const Landing: React.FC = () => {
     },
     {
       q: 'Can I upload an arbitrary repository right now?',
-      a: 'For this version (InnoHacks 4.0), Rerun operates on an allow-list of curated synthetic benchmark cases to ensure verifiable, deterministic judging.',
+      a: 'Rerun operates on an allow-list of curated benchmark cases to ensure verifiable, deterministic evaluation.',
     },
   ];
 
@@ -182,7 +182,7 @@ export const Landing: React.FC = () => {
                 <li className="flex items-start gap-2.5">
                   <span className="text-rust font-bold">•</span>
                   <span>
-                    <strong>Curated benchmark cases:</strong> For InnoHacks 4.0, runs operate on the 5 allow-listed benchmark cases to ensure verifiable, deterministic judging.
+                    <strong>Curated benchmark cases:</strong> Runs operate on the 5 allow-listed benchmark cases to ensure verifiable, deterministic evaluation.
                   </span>
                 </li>
                 <li className="flex items-start gap-2.5">
@@ -273,7 +273,7 @@ export const Landing: React.FC = () => {
                   {isStatic ? 'Enable Scroll Animations' : 'Skip Scroll Animations'}
                 </button>
                 <span>·</span>
-                <span>InnoHacks 4.0 · 2026</span>
+                <span>Rerun Lab · 2026</span>
               </div>
             </footer>
           </div>

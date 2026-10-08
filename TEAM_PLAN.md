@@ -1,6 +1,6 @@
 # 🏗️ RERUN — Team Build Plan & Collaboration Guide
 
-> **Event:** InnoHacks 4.0, Agentic AI & GenAI track (10–11 Oct 2026)
+> **Project:** Rerun — Autonomous Research Paper Reproducibility Agent
 > **Team Size:** 3 members
 > **Primary Tool:** Google Antigravity (each member runs their own session)
 > **Source of Truth:** [`rerun_antigravity_build_prompt.md`](file:///c:/Users/shivt/Documents/Programs/Rerun/Black-bot/rerun_antigravity_build_prompt.md) (technical spec) and [`rerun_project_guide.md`](file:///c:/Users/shivt/Documents/Programs/Rerun/Black-bot/rerun_project_guide.md) (human guide)
@@ -632,7 +632,7 @@ To avoid merge conflicts, each track owns specific directories:
 
 ## 💬 Communication Protocol
 
-### During the Hackathon
+### During Development & Sprints
 
 1. **Sync every 2 hours** — 2 min standup: "what I finished, what's next, am I blocked?"
 2. **Git pull before starting work** — always work on the latest

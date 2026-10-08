@@ -2,7 +2,7 @@
 
 *Version 2 (updated with your decisions on patch size, GPU, guarded parameters, documentation trust, and the website-or-app question). Read this first. It explains the whole project in plain words: what Rerun is, how it works, how we build it, and how to work with Antigravity. The companion file `Rerun_Antigravity_Build_Prompt.md` is the exact, technical instruction sheet for the coding agent. This guide is the human version of it.*
 
-**Event:** InnoHacks 4.0, Agentic AI & GenAI track (10 to 11 Oct 2026).
+**Project:** Rerun — Computational Reproducibility Agent.
 **Sources used:** the Antigravity build prompt, the Complete Project Specification, and the Implementation Plan.
 
 ---
@@ -473,7 +473,7 @@ It is a **web application that runs on your own computer**. It is not a public w
 - **Can a web app run Docker? Yes, because the "web app" is two parts.** A browser page cannot start containers, and it never tries. The **backend** is an ordinary program on your computer, and ordinary programs can talk to Docker (Rerun uses the Docker Python library). So the flow is: browser asks the backend, the backend asks Docker to start a container, the backend streams the logs back to the page. Requirement: **Docker Desktop or Docker Engine must be running on the same machine as the backend.** (A public cloud website would need Docker on its server plus much stronger isolation; that is out of scope here.)
 - **How Docker fits:** only the **backend** talks to Docker, to start and stop the experiment containers. The browser never touches Docker. The backend itself is not in a container (mounting the Docker socket into a container is forbidden).
 - **For the demo:** open `http://localhost:5173` on the demo laptop. No cloud, no accounts, no login.
-- **If you ever want a desktop app:** it could be wrapped later (for example with Electron or Tauri), but that is out of scope for the hackathon.
+- **If you ever want a desktop app:** it could be wrapped later (for example with Electron or Tauri), but that is out of scope for this release.
 
 **The UI at a glance:**
 
