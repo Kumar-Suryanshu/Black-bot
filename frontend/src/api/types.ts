@@ -66,12 +66,23 @@ export interface PatchEdit {
 export interface Patch {
   id: string;
   hypothesis_id?: string;
+  type?: 'dependency' | 'config_value' | 'path_string' | 'code_typo' | 'code_api_compat';
   risk_class: 'environment_fix' | 'bug_fix' | 'config_alignment' | 'deviation';
   edits: PatchEdit[];
   diff: string;
   rationale: string;
-  evidence_ids: string[];
-  status: 'proposed' | 'applied' | 'rejected' | 'reverted';
+  // Named `evidence` on the backend PatchProposal model. This was `evidence_ids` here, so
+  // evidence chips never rendered on the approval modal.
+  evidence: string[];
+  status: 'proposed' | 'applied' | 'rejected' | 'reverted' | 'dropped' | 'approved';
+  critic_status?: string;
+  policy_result?: {
+    passed: boolean;
+    violations: string[];
+    risk_class: string;
+    flags: string[];
+    requires_extra_confirm: boolean;
+  } | null;
   created_at?: string;
   comment?: string;
 }
@@ -80,7 +91,8 @@ export interface CriticReview {
   id: string;
   patch_id: string;
   round: number;
-  verdict: 'SUPPORTED' | 'OBJECTED' | 'ABSTAIN';
+  // Matches agent.state.CriticReview; the previous 'OBJECTED' | 'ABSTAIN' values never existed.
+  verdict: 'SUPPORTED' | 'NEEDS_REVISION' | 'BLOCK';
   checks: {
     cause_is_cited_and_exists: boolean;
     evidence_actually_supports_cause: boolean;
@@ -95,7 +107,8 @@ export interface CriticReview {
   verified_evidence: Array<{ id: string; what_i_found: string }>;
   objections: string[];
   required_changes: string[];
-  confidence: 'high' | 'med' | 'low';
+  confidence: 'high' | 'medium' | 'low';
+  model?: string;
 }
 
 export interface PendingAction {

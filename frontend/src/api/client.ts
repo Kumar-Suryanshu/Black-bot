@@ -119,6 +119,7 @@ export async function rejectClaims(projectId: string): Promise<void> {
 export async function fetchPendingApproval(projectId: string): Promise<{
   approval_id: string;
   patch: Patch;
+  reviews: CriticReview[];
   critic_review: CriticReview | null;
   banner: string | null;
   requires_extra_confirm: boolean;

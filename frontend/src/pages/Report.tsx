@@ -326,10 +326,10 @@ export const Report: React.FC = () => {
 
                   <p className="text-[#1F2A44] font-sans text-xs">{p.rationale}</p>
 
-                  {p.evidence_ids && p.evidence_ids.length > 0 && (
+                  {p.evidence && p.evidence.length > 0 && (
                     <div className="flex items-center gap-2 pt-2 border-t border-[#CDC5B4]/50">
                       <span className="text-[#4A5470] text-[11px]">Cited Evidence:</span>
-                      {p.evidence_ids.map((eid) => (
+                      {p.evidence.map((eid) => (
                         <EvidenceChip key={eid} id={eid} onClick={(eId) => setSelectedEvidenceId(eId)} />
                       ))}
                     </div>

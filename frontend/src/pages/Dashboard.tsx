@@ -58,9 +58,17 @@ export const Dashboard: React.FC = () => {
         const appData = await fetchPendingApproval(id);
         setCurrentApprovalId(appData.approval_id);
         setCurrentPatch(appData.patch);
-        setCriticReview(appData.critic_review);
+        // Latest review from the history, falling back to the single-object form.
+        const latestReview =
+          appData.reviews && appData.reviews.length > 0
+            ? appData.reviews[appData.reviews.length - 1]
+            : appData.critic_review ?? null;
+        setCriticReview(latestReview);
         setApprovalBanner(appData.banner);
-        setRequiresExtraConfirm(appData.requires_extra_confirm);
+        // A banner always requires explicit confirmation, even if the server omits the flag.
+        setRequiresExtraConfirm(
+          Boolean(appData.requires_extra_confirm || appData.banner)
+        );
         setIsApprovalOpen(true);
       } else {
         setIsApprovalOpen(false);

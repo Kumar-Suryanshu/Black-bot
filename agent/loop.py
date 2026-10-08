@@ -67,22 +67,45 @@ def set_sandbox(sb):
     _OVERRIDE_SANDBOX = sb
 
 def resolve_attempt_log(state: ProjectState, deps: dict, attempt_num: Optional[int] = None) -> Optional[Path]:
-    """Robustly resolves the path to an attempt's execution log file."""
+    """
+    Resolves the path to a specific attempt's execution log.
+
+    Attempt logs are named `<kind>_<n>.log`, so a failed dependency install writes
+    `setup_1.log` rather than `run_1.log`. Callers that hardcoded `run_{n}.log` therefore
+    missed exactly the attempts that had an install error worth reading.
+
+    The attempt's own recorded log_path wins, then a glob over any kind for that attempt
+    number. The "most recent log" fallbacks are consulted only when the caller is actually
+    asking for the latest attempt, so requesting attempt 1 can never return attempt 3's log.
+    """
     att = state.attempts[attempt_num - 1] if attempt_num and 0 < attempt_num <= len(state.attempts) else (state.attempts[-1] if state.attempts else None)
     n = att.n if att else (attempt_num or len(state.attempts) or 1)
-    
-    candidates = []
+    is_latest = (attempt_num is None) or (n == (state.attempts[-1].n if state.attempts else n))
+
+    log_dir = Path("data/runs") / state.project_id / "logs"
+    ws = deps.get("workspace", state.workspace or f"data/runs/{state.project_id}/workspace")
+
+    candidates: list = []
     if att and att.log_path:
         candidates.append(Path(att.log_path))
-    if getattr(state, "latest_log_path", None):
-        candidates.append(Path(state.latest_log_path))
-    if deps.get("latest_log_path"):
-        candidates.append(Path(deps["latest_log_path"]))
-    candidates.append(Path("data/runs") / state.project_id / "logs" / f"run_{n}.log")
-    
-    ws = deps.get("workspace", state.workspace or f"data/runs/{state.project_id}/workspace")
+
+    # Any kind recorded for this attempt number (run_, setup_, investigate_, ...)
+    for base in (log_dir, Path(ws) / "logs"):
+        try:
+            if base.is_dir():
+                candidates.extend(sorted(base.glob(f"*_{n}.log")))
+        except Exception:
+            pass
+
+    if is_latest:
+        if getattr(state, "latest_log_path", None):
+            candidates.append(Path(state.latest_log_path))
+        if deps.get("latest_log_path"):
+            candidates.append(Path(deps["latest_log_path"]))
+
+    candidates.append(log_dir / f"run_{n}.log")
     candidates.append(Path(ws) / "logs" / f"run_{n}.log")
-    
+
     for c in candidates:
         if c and str(c).strip() and c.is_file():
             return c

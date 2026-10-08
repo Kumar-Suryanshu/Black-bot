@@ -424,11 +424,23 @@ def get_pending_approval(id: str):
         raise HTTPException(status_code=404, detail="Patch not found")
         
     reviews = [r for r in state.critic_reviews if r.patch_id == patch_id]
-    
+
+    # The UI needs to know whether the operator must tick the extra-confirmation box. Without
+    # it the box never rendered, while process_approval rejected any approve on a bannered
+    # patch for lack of confirm_extra, so bannered patches could not be approved at all.
+    # A banner always demands explicit confirmation; policy may demand it independently.
+    policy_result = patch.policy_result or {}
+    requires_extra_confirm = bool(
+        state.pending.get("banner") or policy_result.get("requires_extra_confirm")
+    )
+
     return {
         "approval_id": state.pending.get("id"),
         "patch": patch.model_dump(),
         "reviews": [r.model_dump() for r in reviews],
+        # Latest review, for clients that want a single object rather than the history.
+        "critic_review": reviews[-1].model_dump() if reviews else None,
+        "requires_extra_confirm": requires_extra_confirm,
         "banner": state.pending.get("banner")
     }
 
@@ -606,13 +618,35 @@ def get_evidence(id: str, eid: str):
 @router.get("/api/projects/{id}/runs/{n}/log")
 @router.get("/api/projects/{id}/logs/{n}")
 def get_run_log(id: str, n: int, tail: Optional[int] = None):
-    log_path = f"data/runs/{id}/logs/run_{n}.log"
-    if not os.path.exists(log_path):
+    """
+    Serves an attempt's log. Attempt logs are named <kind>_<n>.log, so a failed dependency
+    install writes setup_<n>.log; hardcoding run_<n>.log here used to 404 precisely when
+    there was an install error to read. Resolution is delegated to the orchestrator's helper.
+    """
+    from agent.loop import resolve_attempt_log
+
+    log_path = None
+    state = get_project_state("data/rerun.db", id)
+    if state:
+        resolved = resolve_attempt_log(state, {}, n)
+        if resolved:
+            log_path = str(resolved)
+
+    if log_path is None:
+        # No project state (or no attempt recorded yet): fall back to the on-disk convention.
+        log_dir = Path(f"data/runs/{id}/logs")
+        matches = sorted(log_dir.glob(f"*_{n}.log")) if log_dir.is_dir() else []
+        if matches:
+            log_path = str(matches[0])
+
+    if not log_path or not os.path.exists(log_path):
         raise HTTPException(status_code=404, detail="Log not found")
+
     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
         lines = f.readlines()
     if tail and tail > 0:
         lines = lines[-tail:]
+    # Response shape is a fixed contract (see test_aligned_log_routes_contract): {"log": ...}
     return {"log": "".join(lines)}
 
 @router.get("/api/projects/{id}/report")
