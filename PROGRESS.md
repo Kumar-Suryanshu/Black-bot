@@ -29,8 +29,22 @@
     - **Feature Flag & Security Notice:** `ALLOW_CUSTOM_REPOS` feature flag (default on locally, togglable) with required sandbox disclaimer displayed.
     - **Defect D11 Fixed:** custom command at `CLAIMS_CONFIRM` stored in `state.user_command` and honored in `handle_plan`.
     - **Frontend `/new`:** source mode switch (*Benchmark | My paper + repo*), GitHub URL validator, optional branch/ref input, drag-and-drop PDF uploader, consent notice banner, and progressive ingest states.
-    - **Tests & Gates:** 24 unit tests covering all 9 failure modes (`test_stage2_input_plumbing.py`), D11 command override test (`test_d11_command_honored.py`), CRLF patch application fixture test (`test_crlf_normalization.py`), and bridge test through custom pipeline (`test_bridge_custom_pipeline.py`). Full suite passes 106 tests.
-  - *Status:* PASS — waiting for user confirmation before Stage 3.
+  - *Status:* PASS
+
+- [x] **Stage 3 (Completion Plan)**: Triage and code-completeness check (R2)
+  - *Branch:* `completion/stage-3`
+  - *Gate Run Results:* PASS:
+    - **`tools/triage.py`:** Deterministic, executes zero repo code. Analyzes AST import completeness (`stdlib`, `declared_dependency`, `local_module`, `unresolved`), detects missing local modules, identifies unimplemented stubs (`raise NotImplementedError`, empty `pass`/`...` bodies, `TODO`/`FIXME`), identifies missing files referenced in README/configs/code, detects Python version requirements dynamically (without hardcoding `">=3.11"`), detects frameworks, missing data files, and distributed requirements.
+    - **Refined GPU Logic (Fixes D5):** Unguarded `.cuda()` or `device="cuda"` or CUDA-only packages (`cupy`, `apex`, `flash-attn`, `bitsandbytes`, `triton`) produce blocker `NEEDS_GPU`; guarded device selections (`torch.cuda.is_available()`) produce warnings only.
+    - **Data Refs Populated (Fixes D6):** Detects missing data references statically and populates `missing_data_refs`.
+    - **Verdicts:** Accurately classifies into `FEASIBLE`, `FEASIBLE_WITH_PROVISIONING`, `NEEDS_GPU`, `NEEDS_LARGE_RESOURCES`, `INCOMPLETE_REPO`, `UNSUPPORTED_FORMAT`.
+    - **API Route:** `POST /api/projects/{id}/triage` returns triage report and updates project state.
+    - **UI:** Repo Triage card on the claims-confirmation screen with verdict badge, frameworks, stubs, and evidence excerpts; plus "Triage Only (Stop Here)" button.
+    - **Benchmark Regression:** `b1`–`b4` remain unblocked on real Docker; `b5_unable` expected outcome regenerated and verified with blocker `NEEDS_GPU`.
+    - **Gate Tests:** 12 unit tests in `tests/unit/test_stage3_triage.py` covering all fixture mini-repos, safety sentinel (proves zero code executed/imported), and API endpoint.
+    - **Real Repos Evaluation:** `docs/triage_samples.md` records complete triage reports for 5 real repos (`karpathy/micrograd`, `karpathy/minGPT`, `lucidrains/denoising-diffusion-pytorch`, `fastai/numerical-linear-algebra`, `eriklindernoren/PyTorch-GAN`) with human evaluation notes.
+    - Full test suite passes 118 tests.
+  - *Status:* PASS — waiting for user confirmation before Stage 4.
 
 ---
 

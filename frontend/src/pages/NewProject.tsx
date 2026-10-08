@@ -13,6 +13,7 @@ import {
   Code,
   AlertTriangle,
   Layers,
+  Search,
 } from 'lucide-react';
 import { NavbarApp } from '../components/layout/NavbarApp';
 import { Footer } from '../components/layout/Footer';
@@ -25,6 +26,7 @@ import {
   confirmClaims,
   rejectClaims,
   fetchProjectState,
+  fetchTriageReport,
 } from '../api/client';
 import type { BenchmarkCase, Claim } from '../api/types';
 
@@ -66,6 +68,7 @@ export const NewProject: React.FC = () => {
   const [claims, setClaims] = useState<Claim[]>([]);
   const [paperSettings, setPaperSettings] = useState<any[]>([]);
   const [runCommand, setRunCommand] = useState<string>('python train.py --config configs/default.yaml');
+  const [triageReport, setTriageReport] = useState<any | null>(null);
   const [loadingClaims, setLoadingClaims] = useState<boolean>(false);
   const [submittingConfirm, setSubmittingConfirm] = useState<boolean>(false);
   const [copiedCmd, setCopiedCmd] = useState<boolean>(false);
@@ -219,6 +222,12 @@ export const NewProject: React.FC = () => {
         if (draft.command) {
           setRunCommand(draft.command);
         }
+        try {
+          const tr = await fetchTriageReport(newProjId);
+          setTriageReport(tr);
+        } catch (e) {
+          console.warn('Triage report fetch error', e);
+        }
       } catch (err: any) {
         console.error('Failed to create custom reproduction', err);
         setGeneralError(err.message || 'Failed to initialize reproduction project.');
@@ -271,6 +280,12 @@ export const NewProject: React.FC = () => {
         setPaperSettings(draft.paper_settings || []);
         if (draft.command) {
           setRunCommand(draft.command);
+        }
+        try {
+          const tr = await fetchTriageReport(newProjId);
+          setTriageReport(tr);
+        } catch (e) {
+          console.warn('Triage report fetch error', e);
         }
       } catch (err: any) {
         console.error('Failed to start reproduction flow', err);
@@ -713,6 +728,94 @@ export const NewProject: React.FC = () => {
                     </div>
                   </div>
 
+                  {/* REPO TRIAGE CARD */}
+                  {triageReport && (
+                    <div className="bg-[#FAF7F0] border border-[#CDC5B4] rounded-xl p-5 space-y-4 shadow-sm font-mono text-xs">
+                      <div className="flex items-center justify-between border-b border-[#CDC5B4] pb-3">
+                        <div className="flex items-center gap-2">
+                          <Search className="w-4 h-4 text-rust" />
+                          <span className="font-bold uppercase tracking-wider text-[#1F2A44]">
+                            Repo Triage & Feasibility Check:
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`px-3 py-1 rounded text-[11px] font-bold uppercase tracking-wider ${
+                              triageReport.verdict === 'FEASIBLE'
+                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                : triageReport.verdict === 'FEASIBLE_WITH_PROVISIONING'
+                                ? 'bg-blue-100 text-blue-800 border border-blue-300'
+                                : triageReport.verdict === 'NEEDS_GPU'
+                                ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                                : 'bg-red-100 text-red-800 border border-red-300'
+                            }`}
+                          >
+                            {triageReport.verdict}
+                          </span>
+                        </div>
+                      </div>
+
+                      <p className="text-xs text-[#4A5470] font-sans leading-relaxed">
+                        {triageReport.reason}
+                      </p>
+
+                      {/* Signals Grid */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-[11px]">
+                        <div className="bg-[#FFFFFF] p-2.5 rounded border border-[#CDC5B4]">
+                          <span className="text-[#4A5470] block">Frameworks:</span>
+                          <span className="font-bold text-[#1F2A44]">
+                            {triageReport.frameworks && triageReport.frameworks.length > 0
+                              ? triageReport.frameworks.join(', ')
+                              : 'Standard / CPU'}
+                          </span>
+                        </div>
+                        <div className="bg-[#FFFFFF] p-2.5 rounded border border-[#CDC5B4]">
+                          <span className="text-[#4A5470] block">Python Req:</span>
+                          <span className="font-bold text-[#1F2A44]">
+                            {triageReport.python_requires || 'Default (3.11)'}
+                          </span>
+                        </div>
+                        <div className="bg-[#FFFFFF] p-2.5 rounded border border-[#CDC5B4]">
+                          <span className="text-[#4A5470] block">GPU Guarding:</span>
+                          <span className="font-bold text-[#1F2A44]">
+                            {triageReport.gpu?.unguarded && triageReport.gpu.unguarded.length > 0
+                              ? `${triageReport.gpu.unguarded.length} Unguarded (Blocker)`
+                              : triageReport.gpu?.guarded && triageReport.gpu.guarded.length > 0
+                              ? `${triageReport.gpu.guarded.length} Guarded (CPU Safe)`
+                              : 'None (CPU Safe)'}
+                          </span>
+                        </div>
+                        <div className="bg-[#FFFFFF] p-2.5 rounded border border-[#CDC5B4]">
+                          <span className="text-[#4A5470] block">Code Stubs:</span>
+                          <span className="font-bold text-[#1F2A44]">
+                            {triageReport.stubs && triageReport.stubs.length > 0
+                              ? `${triageReport.stubs.length} detected`
+                              : '0 stubs (Clean)'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Evidence excerpts if any */}
+                      {triageReport.evidence && triageReport.evidence.length > 0 && (
+                        <div className="space-y-1.5 pt-2 border-t border-[#CDC5B4]">
+                          <span className="text-[10px] text-rust font-bold uppercase tracking-wider block">
+                            Triage Evidence Excerpts:
+                          </span>
+                          <div className="space-y-1 max-h-32 overflow-y-auto">
+                            {triageReport.evidence.map((ev: string, idx: number) => (
+                              <div
+                                key={idx}
+                                className="bg-[#FFFFFF] px-2.5 py-1.5 rounded text-[11px] font-mono border border-kraft/50 text-[#1F2A44]"
+                              >
+                                {ev}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Claims Table */}
                   <div className="space-y-3 font-mono text-xs">
                     <div className="flex items-center justify-between">
@@ -842,6 +945,16 @@ export const NewProject: React.FC = () => {
                     </button>
 
                     <div className="flex items-center gap-3 w-full sm:w-auto">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (projectId) navigate(`/p/${projectId}`);
+                        }}
+                        className="w-full sm:w-auto px-4 py-3 rounded border border-[#CDC5B4] bg-[#FAF7F0] text-xs font-mono font-bold text-[#1F2A44] hover:bg-[#E5DFD3] transition-colors shadow-sm"
+                      >
+                        Triage Only (Stop Here)
+                      </button>
+
                       <button
                         type="button"
                         onClick={handleConfirmClaims}

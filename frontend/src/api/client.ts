@@ -74,6 +74,17 @@ export async function fetchProjectState(projectId: string): Promise<ProjectState
   return res.json();
 }
 
+export async function fetchTriageReport(projectId: string): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/projects/${projectId}/triage`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    throw new Error(data?.detail || `Failed to fetch triage report: ${res.statusText}`);
+  }
+  return res.json();
+}
+
 export async function fetchClaimsDraft(projectId: string): Promise<{
   claims: Claim[];
   paper_settings: any[];

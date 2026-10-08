@@ -291,6 +291,34 @@ def reject_claims(id: str):
     save_project_state("data/rerun.db", id, state.benchmark_id, state.repo_commit, "INCONCLUSIVE", state)
     return {"status": "rejected"}
 
+@router.post("/api/projects/{id}/triage")
+def run_project_triage(id: str):
+    state = get_project_state("data/rerun.db", id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    from tools.triage import triage_report
+    from pathlib import Path
+    
+    ws = Path(f"data/runs/{id}/workspace")
+    if not ws.exists():
+        if state.benchmark_id:
+            reg_path = "benchmarks/registry.json"
+            if os.path.exists(reg_path):
+                with open(reg_path, "r", encoding="utf-8") as f:
+                    reg = json.load(f)
+                case_info = next((c for c in reg.get("cases", []) if c["id"] == state.benchmark_id), None)
+                if case_info and case_info.get("repo_path") and os.path.exists(case_info["repo_path"]):
+                    ws = Path(case_info["repo_path"])
+                    
+    if not ws.exists():
+        raise HTTPException(status_code=400, detail="Project workspace does not exist on disk.")
+
+    report = triage_report(str(ws))
+    state.repo_profile["triage"] = report
+    save_project_state("data/rerun.db", id, state.benchmark_id, state.repo_commit, state.phase, state)
+    return report
+
 @router.get("/api/projects/{id}/events")
 def stream_events(id: str, request: Request, last_event_id: Optional[str] = Header(default="0")):
     try:
