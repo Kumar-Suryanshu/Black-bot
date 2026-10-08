@@ -105,6 +105,19 @@
     - **Test Suite Status:** 8/8 tests passing in `tests/unit/test_stage7_commands_metrics.py`; full suite passing 153/153 tests (`pytest tests -q`); frontend builds cleanly (`npm run build --prefix frontend`).
   - *Status:* PASS — ready for Stage 8.
 
+- [x] **Stage 8 (Completion Plan)**: Real-paper claim intake (R5)
+  - *Branch:* `completion/stage-8`
+  - *Gate Run Results:* PASS:
+    - **Extraction Engine (`tools/paper.py`):** Layout-aware block sorting (`_sort_blocks_layout_aware`) preserves two-column reading order without interleaving paragraphs. Extracts native PyMuPDF markdown tables with `[pN:Tk]` identifiers (`_extract_tables`). Filters running headers and footers (`_clean_header_footer`).
+    - **Deterministic Page Scoring & Prompt Capping:** Scores pages based on results, metrics (`accuracy`, `f1`, `bleu`, `auc`, `error rate`), hyperparameters, and table presence. Caps prompt context text to $\le 60\text{k}$ characters while preserving Page 1 (title/abstract) and top-scoring evidence/appendix pages in ascending order.
+    - **Verbatim Quote Verification:** Normalizes Unicode ligatures (`ﬁ` $\to$ `fi`, `ﬂ` $\to$ `fl`), dashes, and whitespace; verifies substrings against paper prose and extracted tables; rejects hallucinated quotes (`test_hallucinated_quote_rejected_real_quote_accepted`).
+    - **Hyperparameter Aliasing & Code Validation:** Maps paper keys (`learning_rate`, `batch_size`, `epochs`, etc.) to repo config keys via default aliases and LLM candidate proposals, validated statically against YAML, JSON, and AST `argparse.add_argument` definitions (`test_hyperparameter_alias_mapping_and_code_validation`).
+    - **Defense-in-Depth & Injection Resistance:** Untrusted PDF text cannot alter execution policy P1–P10 or escalate permissions. Command validator strictly rejects execution via `-c` (`sh -c`, `bash -c`), and policy engine blocks unauthorized file access (`test_pdf_prompt_injection_does_not_change_policy_or_permissions`).
+    - **Claim Picker & Human Selection:** Supports selecting 1–3 claims (`selected=True`), designating a single primary (`primary=True`), with unselected claims tracked for reporting under "not checked" (`test_claim_picker_selection_and_primary_assignment`).
+    - **Evaluation on 3 Real Peer-Reviewed Papers (`docs/intake_eval.md`):** Tested across `Neural Networks Fail to Learn Periodic Functions.pdf` (NeurIPS 2020), `Learning to Deceive with Attention-Based Explanations.pdf` (ACL 2020), and `Hamiltonian Neural Network.pdf` (NeurIPS 2019). Discovered $\ge 8$ candidates per paper; achieved **100% (8/8) verbatim quote verification** across all 3 papers; verified true headline claim is captured in top 3 on all 3 papers (**3/3 passed vs $\ge 2/3$ gate target**).
+    - **Test Suite Status:** 10/10 tests passing in `tests/unit/test_stage8_paper_intake.py`; full regression passing 163/163 tests (`pytest tests -q`); frontend builds cleanly (`npm run build --prefix frontend`).
+  - *Status:* PASS — ready for Stage 9.
+
 ---
 
 ## Initial Build Stage Gates and Deliverables

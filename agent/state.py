@@ -33,6 +33,12 @@ class Claim(BaseModel):
     metric_extraction: MetricExtraction | None = None
     source_ref: str
     source_quote: str
+    source_kind: Literal["text", "table"] = "text"
+    table_ref: str | None = None
+    cell_ref: str | None = None
+    quote_verified: bool = True
+    verified_in_paper: bool = True
+    selected: bool = False
     primary: bool = True
     confirmed_by_human: bool = False
 
@@ -41,6 +47,8 @@ class PaperSetting(BaseModel):
     value: Any
     source_ref: str
     source_quote: str
+    repo_key: str | None = None
+    alias_validated: bool = False
 
 class Plan(BaseModel):
     command: str
@@ -172,6 +180,7 @@ class ProjectState(BaseModel):
     provisioning_approved: bool = False
     pending: dict | None = None
     final: dict | None = None
+    llm_call_metadata: list[dict] = Field(default_factory=list)
 
 class Event(BaseModel):
     id: int

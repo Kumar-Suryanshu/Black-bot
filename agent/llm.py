@@ -45,6 +45,10 @@ Rules:
 # Global registry for active FakeLLM instance in test environments
 _ACTIVE_FAKE_LLM = None
 _EVENT_LISTENER: Optional[Callable[[str, dict], None]] = None
+LLM_CALL_LOGS: list[dict] = []
+
+def get_llm_call_logs() -> list[dict]:
+    return list(LLM_CALL_LOGS)
 
 def set_fake_llm(fake_instance):
     global _ACTIVE_FAKE_LLM
@@ -202,6 +206,18 @@ def call(
         
     cassette_key = get_cassette_key(role, mode, payload, model)
     cassette_path = Path(current_cassette_dir) / benchmark_id / f"{cassette_key}.json"
+    
+    call_meta = {
+        "role": role,
+        "mode": mode,
+        "model": model,
+        "temperature": 0.0,
+        "prompt_hash": cassette_key,
+        "ts": time.time()
+    }
+    LLM_CALL_LOGS.append(call_meta)
+    if _EVENT_LISTENER:
+        _EVENT_LISTENER("llm_call_recorded", call_meta)
     
     # Replay check
     if current_llm_mode == "replay":

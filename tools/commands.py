@@ -156,6 +156,13 @@ def validate_command(cmd_str: str, workspace: Optional[str] = None) -> Dict[str,
                 "argv": argv,
                 "command": clean_cmd
             }
+        if "-c" in argv:
+            return {
+                "valid": False,
+                "reason": f"Execution via '{binary} -c' is not permitted; execute commands directly as argv lists",
+                "argv": argv,
+                "command": clean_cmd
+            }
         script_name = argv[1]
         if workspace and Path(workspace).is_dir():
             ws_path = Path(workspace)
