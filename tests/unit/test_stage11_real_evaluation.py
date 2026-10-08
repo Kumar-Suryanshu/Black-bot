@@ -60,9 +60,20 @@ def test_measured_real_report_structure_and_failures():
     # Slide-traced numbers
     assert "Total Real Cases Evaluated: 6" in content or "Total Real Cases: **6**" in content
     assert "3" in content # clean reproductions
-    assert "5.5x" in content # speedup factor
-    assert "138.5 minutes" in content # total human baseline
-    assert "25.1 minutes" in content # total rerun execution
+
+    # Provenance, not fabricated performance claims.
+    #
+    # This block used to assert `"5.5x" in content` and `"25.1 minutes" in content`, which
+    # required the artifact to carry a speedup and a rerun duration that were hand-written
+    # constants in real_cases.json rather than anything measured. The test was therefore
+    # enforcing the defect. The artifact must now disclose what it measured instead.
+    assert "5.5x" not in content, "artifact must not carry a hardcoded speedup figure"
+    assert "Speedup: **not reported**" in content
+    assert "NOT measured here" in content, "human baseline must be labelled as an estimate"
+    assert "measured wall clock" in content, "rerun time must be labelled as measured"
+    assert "local reimplementations, not upstream clones" in content, (
+        "artifact must disclose that upstream repositories are not cloned or executed"
+    )
 
 def test_limitations_paragraph_selection_bias():
     """
