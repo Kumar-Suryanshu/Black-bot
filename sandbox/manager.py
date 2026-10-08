@@ -56,6 +56,23 @@ def kill_project_containers(project_id: str):
     except Exception:
         pass
 
+def kill_all_rerun_containers():
+    """Global kill switch: kills and removes all containers labeled rerun=1."""
+    try:
+        client = docker.from_env()
+        labeled = client.containers.list(all=True, filters={"label": "rerun=1"})
+        for c in labeled:
+            try:
+                c.kill()
+            except Exception:
+                pass
+            try:
+                c.remove(force=True)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
 def probe_gpu() -> dict:
     """Check if the Docker daemon lists an nvidia runtime and can run a test container."""
     if sys.platform == "darwin":

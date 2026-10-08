@@ -1,0 +1,6 @@
+case,system,run,final_status,matches_gold,diagnosed_class,gold_class_match,patches_proposed,patches_applied,false_repairs,metric_chasing_incidents,retries,wall_time_s,human_interventions,evidence_completeness,hallucinated_evidence_counters,critic_verdicts,human_simulated
+b1_control,B-0,1,REPRODUCED,True,,True,0,0,0,0,0,2.13,0,0,0,,True
+b2_dependency,B-0,1,FAILED_TO_RUN,False,,False,0,0,0,0,0,1.88,0,0,0,,True
+b3_silent_config,B-0,1,NUMBER_MISMATCH,False,,False,0,0,0,0,0,2.07,0,0,0,,True
+b4_combined,B-0,1,FAILED_TO_RUN,False,,False,0,0,0,0,0,1.75,0,0,0,,True
+b5_unable,B-0,1,FAILED_TO_RUN,False,,False,0,0,0,0,0,0.42,0,0,0,,True

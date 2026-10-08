@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 from typing import Optional, List
 from fastapi import APIRouter, HTTPException, Header, Request, Response
 from fastapi.responses import StreamingResponse, FileResponse
@@ -225,7 +226,10 @@ def start_project(id: str):
         raise HTTPException(status_code=404, detail="Project not found")
     state.phase = "INGEST"
     save_project_state("data/rerun.db", id, state.benchmark_id, state.repo_commit, state.phase, state)
-    start_project_worker(id)
+    try:
+        start_project_worker(id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=429, detail=str(e))
     return {"status": "started"}
 
 @router.get("/api/projects/{id}")
@@ -586,4 +590,61 @@ def get_key_stats():
     """Returns real-time usage statistics and rotation status for all API keys in the pool."""
     from agent.key_rotator import key_rotator
     return key_rotator.get_stats()
+
+@router.delete("/api/projects/{id}")
+def delete_project(id: str):
+    """
+    Data deletion: Removes all project state, workspace, PDF, logs, outputs, wheelhouse,
+    and database rows for the given project (R9).
+    """
+    stop_project_worker(id)
+    try:
+        import sandbox.manager
+        sandbox.manager.kill_project_containers(id)
+    except Exception:
+        pass
+
+    # Delete on-disk run directory
+    import shutil
+    run_dir = Path(f"data/runs/{id}")
+    if run_dir.exists():
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+    # Delete from SQLite
+    conn = get_connection("data/rerun.db")
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM projects WHERE id = ?", (id,))
+    cursor.execute("DELETE FROM events WHERE project_id = ?", (id,))
+    cursor.execute("DELETE FROM evidence WHERE project_id = ?", (id,))
+    conn.commit()
+    conn.close()
+
+    return {"status": "deleted", "id": id}
+
+@router.get("/api/projects/{id}/disk")
+def get_project_disk(id: str):
+    """Returns total disk usage for a project's run directory."""
+    run_dir = Path(f"data/runs/{id}")
+    total_bytes = 0
+    if run_dir.exists():
+        for p in run_dir.rglob("*"):
+            if p.is_file():
+                try:
+                    total_bytes += p.stat().st_size
+                except Exception:
+                    pass
+    return {
+        "id": id,
+        "disk_bytes": total_bytes,
+        "disk_mb": round(total_bytes / (1024 * 1024), 2)
+    }
+
+@router.post("/api/admin/kill-switch")
+def global_kill_switch():
+    """Global emergency kill switch: terminates all workers and kills all labeled containers."""
+    import sandbox.manager
+    runner.stop_all_workers()
+    sandbox.manager.kill_all_rerun_containers()
+    return {"status": "all_containers_and_workers_terminated"}
+
 
