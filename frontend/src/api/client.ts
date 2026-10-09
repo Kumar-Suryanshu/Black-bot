@@ -189,6 +189,17 @@ export async function approveProvisioning(projectId: string, packages?: string[]
   return res.json();
 }
 
+export async function rejectProvisioning(projectId: string): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/projects/${projectId}/provisioning/reject`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `Failed to reject provisioning: ${res.statusText}`);
+  }
+  return res.json();
+}
+
 export async function fetchProvisioningPlan(projectId: string): Promise<any> {
   const res = await fetch(`${BASE_URL}/api/projects/${projectId}/provisioning/plan`);
   if (!res.ok) throw new Error(`Failed to fetch provisioning plan: ${res.statusText}`);

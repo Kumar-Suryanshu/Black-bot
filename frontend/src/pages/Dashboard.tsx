@@ -8,6 +8,7 @@ import { Terminal } from '../components/dashboard/Terminal';
 import { DiffView } from '../components/dashboard/DiffView';
 import { AttemptsTable } from '../components/dashboard/AttemptsTable';
 import { ApprovalModal } from '../components/dashboard/ApprovalModal';
+import { ProvisioningModal } from '../components/dashboard/ProvisioningModal';
 import { EvidenceDrawer } from '../components/ui/EvidenceDrawer';
 import { Footer } from '../components/layout/Footer';
 import { useEventStream } from '../hooks/useEventStream';
@@ -16,6 +17,8 @@ import {
   fetchPendingApproval,
   submitApproval,
   fetchRunLog,
+  approveProvisioning,
+  rejectProvisioning,
 } from '../api/client';
 import type {
   ProjectStateSummary,
@@ -39,6 +42,11 @@ export const Dashboard: React.FC = () => {
   const [criticReview, setCriticReview] = useState<CriticReview | null>(null);
   const [approvalBanner, setApprovalBanner] = useState<string | null>(null);
   const [requiresExtraConfirm, setRequiresExtraConfirm] = useState(false);
+
+  // Provisioning gate state. The orchestrator and the API have always had this gate; the
+  // console never rendered it, so a project whose preflight proposed a provisioning plan
+  // parked at PREFLIGHT with no way to approve and never progressed.
+  const [isProvisioningOpen, setIsProvisioningOpen] = useState(false);
 
   // Evidence Drawer state
   const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null);
@@ -73,6 +81,8 @@ export const Dashboard: React.FC = () => {
       } else {
         setIsApprovalOpen(false);
       }
+
+      setIsProvisioningOpen(data.pending?.kind === 'provisioning');
 
       // Load active run log
       const attemptsCount = data.attempts?.length || 0;
@@ -136,6 +146,21 @@ export const Dashboard: React.FC = () => {
     } catch (e) {
       console.error('Failed to reject patch', e);
     }
+  };
+
+  // Handle the dependency provisioning gate
+  const handleApproveProvisioning = async () => {
+    if (!id) return;
+    await approveProvisioning(id);
+    setIsProvisioningOpen(false);
+    await loadState();
+  };
+
+  const handleRejectProvisioning = async () => {
+    if (!id) return;
+    await rejectProvisioning(id);
+    setIsProvisioningOpen(false);
+    await loadState();
   };
 
   // Handle human patch edit (D14)
@@ -257,6 +282,17 @@ export const Dashboard: React.FC = () => {
           onSelectEvidence={(eid) => setSelectedEvidenceId(eid)}
         />
       )}
+
+      {/* Dependency Provisioning Gate */}
+      <ProvisioningModal
+        isOpen={isProvisioningOpen}
+        packages={state?.pending?.packages || []}
+        details={state?.pending?.details}
+        pythonImage={state?.pending?.python_image}
+        warnings={state?.pending?.warnings}
+        onApprove={handleApproveProvisioning}
+        onReject={handleRejectProvisioning}
+      />
 
       {/* Slide-over Evidence Drawer */}
       <EvidenceDrawer

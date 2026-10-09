@@ -128,3 +128,61 @@ def test_import_name_is_mapped_to_its_pip_name(tmp_path):
 def test_inference_is_skipped_without_a_triage_report(tmp_path):
     assert infer_packages_from_imports(None, workspace=str(tmp_path)) == []
     assert infer_packages_from_imports({}, workspace=str(tmp_path)) == []
+
+
+# ---------------------------------------------------------------------------
+# The provisioning gate must carry everything the console needs to render it
+#
+# The orchestrator and the API have always had this third human gate, but nothing in the
+# console rendered `pending.kind === "provisioning"`. A project whose preflight proposed a
+# plan parked at PREFLIGHT showing "Awaiting approval" with no control to approve, and sat
+# there indefinitely. approveProvisioning existed in the API client and was never called.
+# ---------------------------------------------------------------------------
+
+def test_provisioning_gate_payload_is_renderable(tmp_path, monkeypatch):
+    """The pending payload must be self-sufficient: packages, details, image and warnings."""
+    import agent.loop as loop
+    from agent.state import ProjectState
+    from tools.triage import triage_report
+
+    repo = _undeclared_repo(tmp_path)
+    state = ProjectState(
+        project_id="p_provgate", source="custom", benchmark_id="custom", repo_commit="c",
+        phase="PREFLIGHT", budgets={"steps_used": 0}, claims=[], paper_settings=[],
+        repo_profile={"triage": triage_report(str(repo))},
+    )
+
+    loop.handle_preflight(state, {"workspace": str(repo)})
+
+    pending = state.pending
+    assert pending is not None, "preflight produced no gate for an unprovisioned repository"
+    assert pending["kind"] == "provisioning"
+    # Every field the console renders.
+    assert pending["packages"], "gate carries no package list"
+    assert pending["details"], "gate carries no per-package detail"
+    assert pending["python_image"]
+    assert isinstance(pending.get("warnings"), list)
+    assert any(p["name"] == "torch" for p in pending["details"])
+    # The run must be parked, not finished.
+    assert state.phase == "PREFLIGHT"
+
+
+def test_provisioning_gate_is_not_raised_when_nothing_is_needed(tmp_path):
+    """A repository needing no provisioning must not stop at the gate."""
+    import agent.loop as loop
+    from agent.state import ProjectState
+    from tools.triage import triage_report
+
+    repo = tmp_path / "selfcontained"
+    repo.mkdir()
+    (repo / "train.py").write_text("import json\n\nif __name__ == '__main__':\n    print('ok')\n")
+
+    state = ProjectState(
+        project_id="p_noprov", source="custom", benchmark_id="custom", repo_commit="c",
+        phase="PREFLIGHT", budgets={"steps_used": 0}, claims=[], paper_settings=[],
+        repo_profile={"triage": triage_report(str(repo))},
+    )
+    loop.handle_preflight(state, {"workspace": str(repo)})
+
+    assert state.pending is None
+    assert state.phase == "SETUP"
