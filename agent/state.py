@@ -184,6 +184,9 @@ class ProjectState(BaseModel):
     # Tool calls the orchestrator refused, with the reason. Fed back to the Solver so it can
     # change course instead of proposing the same refused action every step.
     rejected_actions: list[dict] = Field(default_factory=list)
+    # What each diagnostic tool call actually found. Fed back to the Solver so it does not
+    # repeat a call whose answer it already has.
+    diagnostic_findings: list[dict] = Field(default_factory=list)
     llm_call_metadata: list[dict] = Field(default_factory=list)
 
 class Event(BaseModel):

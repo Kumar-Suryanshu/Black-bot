@@ -13,14 +13,31 @@ class FakeLLM:
     def respond(self, messages: List[Dict[str, str]]) -> str:
         if not self.script:
             raise RuntimeError("FakeLLM script exhausted: no more responses configured.")
-            
-        expected_role, expected_mode, canned_resp = self.script.pop(0)
+
         user_msg = messages[-1]["content"]
-        
-        # Verify mode in user prompt
-        assert f"Mode: {expected_mode}" in user_msg or "Your response was invalid" in user_msg, (
-            f"FakeLLM expected mode '{expected_mode}', but user prompt was: {user_msg[:120]}"
-        )
+
+        # Match the next response by MODE rather than strictly by position.
+        #
+        # Positional matching coupled every script to one exact sequence of model calls, so
+        # any change to the orchestration (for instance deriving a mechanical fix in code
+        # and skipping diagnose_step) handed the wrong canned reply to the next caller and
+        # failed with a confusing assertion. Matching by mode keeps every existing script
+        # valid while tolerating calls that no longer happen.
+        index = 0
+        if "Your response was invalid" not in user_msg:
+            index = next(
+                (i for i, (_r, mode, _resp) in enumerate(self.script)
+                 if f"Mode: {mode}" in user_msg),
+                -1,
+            )
+            if index == -1:
+                requested = user_msg.split("\n", 1)[0]
+                raise AssertionError(
+                    f"FakeLLM has no scripted response for {requested!r}. "
+                    f"Remaining modes: {[m for _r, m, _x in self.script]}"
+                )
+
+        expected_role, expected_mode, canned_resp = self.script.pop(index)
         
         self.history.append({
             "expected_role": expected_role,
