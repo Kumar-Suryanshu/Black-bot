@@ -135,6 +135,16 @@ def build_container_spec(project_id: str, workspace: Path, is_setup: bool, comma
     )
     
     if is_setup:
+        # pip unpacks wheels into TMPDIR before installing. /tmp is a RAM-backed tmpfs
+        # bounded by the container memory limit, so a large wheel such as torch (811 MB
+        # installed, and roughly that again while unpacking) exhausted it and the install
+        # died with "No space left on device" even with ample disk free. Give the installer
+        # a disk-backed scratch directory outside the repository workspace instead.
+        pip_tmp = Path(f"data/runs/{project_id}/pip_tmp").absolute()
+        pip_tmp.mkdir(parents=True, exist_ok=True)
+        spec["volumes"][str(pip_tmp)] = {"bind": "/pip_tmp", "mode": "rw"}
+        spec["environment"]["TMPDIR"] = "/pip_tmp"
+
         spec["volumes"][str(wheelhouse)] = {"bind": "/wheelhouse", "mode": "ro"}
         find_links = ["--find-links", "/wheelhouse"]
         if project_whl.exists():
@@ -196,6 +206,45 @@ def _make_tree_group_writable(root: Path) -> None:
             except Exception:
                 pass
 
+def _safe_remove(container) -> None:
+    """
+    Remove a container, tolerating the removal already being under way.
+
+    Docker removes containers asynchronously, so a force-remove can collide with a removal
+    already in progress and answer 409 Conflict. That exception propagated out of the
+    sandbox and aborted the whole reproduction with "internal error", discarding a run that
+    had actually completed.
+    """
+    for _ in range(3):
+        try:
+            container.remove(force=True)
+            return
+        except docker.errors.NotFound:
+            return
+        except docker.errors.APIError as e:
+            message = str(e).lower()
+            if "already in progress" in message or "is being removed" in message:
+                time.sleep(0.5)
+                continue
+            return
+        except Exception:
+            return
+
+
+def _remove_container_by_name(client, name: str, timeout_s: float = 10.0) -> None:
+    """Free a container name before reusing it, waiting for any in-flight removal."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            existing = client.containers.get(name)
+        except docker.errors.NotFound:
+            return
+        except Exception:
+            return
+        _safe_remove(existing)
+        time.sleep(0.3)
+
+
 def run_container(project_id: str, workspace: Path, is_setup: bool, command: str, kind: str, n: int, python_image: str = "rerun-base:py311", run_timeout_override: Optional[int] = None) -> RunResult:
     limits = get_limits()
     client = docker.from_env()
@@ -216,13 +265,9 @@ def run_container(project_id: str, workspace: Path, is_setup: bool, command: str
     # 2. Build spec and run
     spec = build_container_spec(project_id, workspace, is_setup, command, python_image=python_image)
     container_name = f"rerun_{project_id}_{kind}_{n}"
-    try:
-        existing = client.containers.get(container_name)
-        existing.remove(force=True)
-    except Exception:
-        pass
+    _remove_container_by_name(client, container_name)
     spec["name"] = container_name
-    
+
     container = client.containers.run(**spec)
     with _ACTIVE_CONTAINERS_LOCK:
         _ACTIVE_CONTAINERS[project_id] = container.id
@@ -285,13 +330,9 @@ def run_container(project_id: str, workspace: Path, is_setup: bool, command: str
                 shutil.copytree(item, dest_output_dir / item.name, dirs_exist_ok=True)
                 
     # 5. Remove container
-    try:
-        container.remove(force=True)
-    except docker.errors.NotFound:
-        pass
-    finally:
-        with _ACTIVE_CONTAINERS_LOCK:
-            _ACTIVE_CONTAINERS.pop(project_id, None)
+    _safe_remove(container)
+    with _ACTIVE_CONTAINERS_LOCK:
+        _ACTIVE_CONTAINERS.pop(project_id, None)
         
     return RunResult(
         exit_code=exit_code,
