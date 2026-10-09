@@ -89,6 +89,8 @@ export async function fetchClaimsDraft(projectId: string): Promise<{
   claims: Claim[];
   paper_settings: any[];
   command: string | null;
+  command_candidates: string[];
+  extraction_issues: string[];
 }> {
   const res = await fetch(`${BASE_URL}/api/projects/${projectId}/claims-draft`);
   if (!res.ok) throw new Error(`Failed to fetch claims draft: ${res.statusText}`);

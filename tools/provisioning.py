@@ -265,14 +265,94 @@ def check_package_wheel_availability(pkg_name: str) -> Dict[str, Any]:
         "reason": "Binary wheel available"
     }
 
-def build_provisioning_plan(workspace: str, project_id: str) -> Dict[str, Any]:
+# Imports that are satisfied by the standard library or by the base image, so they should
+# never be turned into provisioning requests.
+_NEVER_PROVISION = {"setuptools", "pip", "wheel", "distutils"}
+
+def _local_module_names(workspace: str) -> set:
+    """
+    Every module name that resolves to a file or package inside the repository, at any depth.
+
+    Triage registers only top-level modules as local, so a sibling import such as
+    `import data` from inside experiment-spring/ is reported as unresolved. Without this
+    filter those names become provisioning requests, and the agent would try to pip install
+    a package named after the repository's own module.
+    """
+    names = set()
+    root = Path(workspace)
+    if not root.is_dir():
+        return names
+    for path in root.rglob("*"):
+        if any(part in (".git", "__pycache__", ".site", ".pytest_cache") for part in path.parts):
+            continue
+        if path.is_file() and path.suffix == ".py":
+            names.add(path.stem.lower())
+        elif path.is_dir():
+            names.add(path.name.lower())
+    return names
+
+def infer_packages_from_imports(
+    triage_report: Optional[dict],
+    workspace: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Derives provisioning candidates from triage's unresolved imports.
+
+    A repository with no requirements.txt, pyproject.toml, setup.cfg or environment.yml
+    produced no provisioning plan at all, so its third-party imports could never be
+    installed and the run always died at the first `import`. Triage already knows exactly
+    which imports it could not resolve; use them.
+    """
+    if not triage_report:
+        return []
+
+    from tools.triage import MODULE_PACKAGE_ALIASES
+
+    unresolved = (triage_report.get("imports") or {}).get("unresolved") or []
+    local_names = _local_module_names(workspace) if workspace else set()
+
+    packages: List[Dict[str, Any]] = []
+    seen = set()
+    for module in unresolved:
+        root = str(module).split(".")[0].strip().lower()
+        if not root or root in _NEVER_PROVISION:
+            continue
+        if root in local_names:
+            # The repository's own module, not a third-party package.
+            continue
+        # Prefer the known pip name for modules whose import name differs (yaml -> pyyaml).
+        candidates = MODULE_PACKAGE_ALIASES.get(root, [root])
+        pkg_name = normalize_package_name(candidates[0])
+        if pkg_name in seen:
+            continue
+        seen.add(pkg_name)
+        packages.append({
+            "name": pkg_name,
+            "raw_spec": pkg_name,
+            "version_constraint": "",
+            "source_file": "inferred from unresolved imports",
+        })
+    return packages
+
+def build_provisioning_plan(
+    workspace: str,
+    project_id: str,
+    triage_report: Optional[dict] = None
+) -> Dict[str, Any]:
     """
     Constructs a dependency provisioning plan.
     Identifies packages, checks wheel status, and triggers NEEDS_BUILD if sdist-only.
     Includes warnings for typosquatting, CPU torch, and unpinned dependency drift.
+
+    When the repository declares no dependencies at all, falls back to the unresolved
+    imports found by triage so such a repository is still installable.
     """
     packages = parse_dependency_files(workspace)
-    python_image = select_python_image(workspace)
+    inferred_from_imports = False
+    if not packages:
+        packages = infer_packages_from_imports(triage_report, workspace)
+        inferred_from_imports = bool(packages)
+    python_image = select_python_image(workspace, triage_report)
     target_whl = f"data/runs/{project_id}/wheelhouse"
 
     if not packages:
@@ -331,13 +411,22 @@ def build_provisioning_plan(workspace: str, project_id: str) -> Dict[str, Any]:
             "target_wheelhouse": target_whl
         }
 
+    if inferred_from_imports:
+        warnings.insert(0, (
+            "This repository declares no dependencies (no requirements.txt, pyproject.toml, "
+            "setup.cfg or environment.yml). The packages below were inferred from imports "
+            "that triage could not resolve, and their versions are unpinned. Review them "
+            "before approving."
+        ))
+
     return {
         "needed": True,
         "status": "PROPOSED",
         "packages": annotated,
         "warnings": warnings,
         "python_image": python_image,
-        "target_wheelhouse": target_whl
+        "target_wheelhouse": target_whl,
+        "inferred_from_imports": inferred_from_imports
     }
 
 def download_wheels_for_project(

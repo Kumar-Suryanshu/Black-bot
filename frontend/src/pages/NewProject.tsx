@@ -67,7 +67,15 @@ export const NewProject: React.FC = () => {
   const [projectId, setProjectId] = useState<string | null>(null);
   const [claims, setClaims] = useState<Claim[]>([]);
   const [paperSettings, setPaperSettings] = useState<any[]>([]);
-  const [runCommand, setRunCommand] = useState<string>('python train.py --config configs/default.yaml');
+  // Empty by default. This used to be pre-filled with 'python train.py --config
+  // configs/default.yaml', a command invented by the console. For any repository that does
+  // not happen to have that exact layout the server rejected it with
+  // "Target script 'train.py' not found in workspace", and because the error was swallowed
+  // the launch button simply appeared to do nothing.
+  const [runCommand, setRunCommand] = useState<string>('');
+  const [commandCandidates, setCommandCandidates] = useState<string[]>([]);
+  const [extractionIssues, setExtractionIssues] = useState<string[]>([]);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
   const [triageReport, setTriageReport] = useState<any | null>(null);
   const [loadingClaims, setLoadingClaims] = useState<boolean>(false);
   const [submittingConfirm, setSubmittingConfirm] = useState<boolean>(false);
@@ -203,25 +211,19 @@ export const NewProject: React.FC = () => {
         if (draft.claims && draft.claims.length > 0) {
           setClaims(draft.claims);
         } else {
-          setClaims([
-            {
-              id: 'C-1',
-              statement: 'Headline result reported in submitted research paper.',
-              metric: 'test_accuracy',
-              reported: 0.95,
-              tolerance: { type: 'abs', value: 0.01 },
-              result_key: 'test_accuracy_mean',
-              source_ref: 'Abstract / Results',
-              source_quote: 'Accuracy achieved by proposed method',
-              primary: true,
-              confirmed_by_human: true,
-            },
-          ]);
+          // No claim survived verbatim-quote verification against the paper. The console
+          // used to substitute a placeholder claim carrying an invented reported value
+          // (0.95 / 0.956), which the operator could then confirm as if it came from the
+          // paper. Show nothing instead and say why.
+          setClaims([]);
         }
         setPaperSettings(draft.paper_settings || []);
-        if (draft.command) {
-          setRunCommand(draft.command);
-        }
+        const candidates = draft.command_candidates || [];
+        setCommandCandidates(candidates);
+        setExtractionIssues(draft.extraction_issues || []);
+        // Prefer a planned command, else a real candidate discovered in the repository.
+        // Never invent one.
+        setRunCommand(draft.command || candidates[0] || '');
         try {
           const tr = await fetchTriageReport(newProjId);
           setTriageReport(tr);
@@ -262,25 +264,19 @@ export const NewProject: React.FC = () => {
         if (draft.claims && draft.claims.length > 0) {
           setClaims(draft.claims);
         } else {
-          setClaims([
-            {
-              id: 'C-1',
-              statement: 'We achieved a test accuracy of 0.956 ± 0.002 (mean ± std over 5 seeds).',
-              metric: 'test_accuracy',
-              reported: 0.956,
-              tolerance: { type: 'abs', value: 0.01 },
-              result_key: 'test_accuracy_mean',
-              source_ref: 'p.1',
-              source_quote: 'test accuracy of 0.956',
-              primary: true,
-              confirmed_by_human: true,
-            },
-          ]);
+          // No claim survived verbatim-quote verification against the paper. The console
+          // used to substitute a placeholder claim carrying an invented reported value
+          // (0.95 / 0.956), which the operator could then confirm as if it came from the
+          // paper. Show nothing instead and say why.
+          setClaims([]);
         }
         setPaperSettings(draft.paper_settings || []);
-        if (draft.command) {
-          setRunCommand(draft.command);
-        }
+        const candidates = draft.command_candidates || [];
+        setCommandCandidates(candidates);
+        setExtractionIssues(draft.extraction_issues || []);
+        // Prefer a planned command, else a real candidate discovered in the repository.
+        // Never invent one.
+        setRunCommand(draft.command || candidates[0] || '');
         try {
           const tr = await fetchTriageReport(newProjId);
           setTriageReport(tr);
@@ -320,12 +316,26 @@ export const NewProject: React.FC = () => {
   // Step 2 Confirm Claims
   const handleConfirmClaims = async () => {
     if (!projectId) return;
+    setConfirmError(null);
+
     if (isTriageBlocked) {
-      setGeneralError(
+      setConfirmError(
         `Cannot launch: triage reported ${triageReport?.verdict}. ${triageBlockReason}`
       );
       return;
     }
+    if (!runCommand.trim()) {
+      setConfirmError('Enter the command that runs the experiment before launching.');
+      return;
+    }
+    if (claims.length === 0) {
+      setConfirmError(
+        'No claim to verify. Add a claim with the metric and the value the paper reports, ' +
+          'or stop at triage.'
+      );
+      return;
+    }
+
     setSubmittingConfirm(true);
     try {
       const confirmedClaims = claims.map((c) => ({
@@ -334,8 +344,12 @@ export const NewProject: React.FC = () => {
       }));
       await confirmClaims(projectId, confirmedClaims, runCommand, allowHighRisk);
       navigate(`/p/${projectId}`);
-    } catch (err) {
+    } catch (err: any) {
+      // The server's reason must reach the operator. Swallowing it here is why the launch
+      // button looked inert when the command did not exist in the repository.
+      const message = err?.message || 'Failed to confirm claims.';
       console.error('Failed to confirm claims', err);
+      setConfirmError(message);
     } finally {
       setSubmittingConfirm(false);
     }
@@ -958,6 +972,64 @@ export const NewProject: React.FC = () => {
                       className="w-full bg-[#FAF7F0] text-[#1F2A44] font-mono text-xs rounded-lg px-4 py-3 border border-[#CDC5B4] focus:outline-none focus:border-rust shadow-inner font-semibold"
                     />
                   </div>
+
+                  {/* Command candidates discovered in the repository */}
+                  {commandCandidates.length > 0 && (
+                    <div className="space-y-2">
+                      <span className="text-[11px] text-[#4A5470] uppercase tracking-wider font-semibold">
+                        Commands found in this repository (click to use):
+                      </span>
+                      <div className="flex flex-wrap gap-2">
+                        {commandCandidates.map((cmd) => (
+                          <button
+                            key={cmd}
+                            type="button"
+                            onClick={() => setRunCommand(cmd)}
+                            className={`px-2.5 py-1.5 rounded border font-mono text-[11px] transition-colors ${
+                              runCommand === cmd
+                                ? 'bg-amber-100 border-amber-400 text-amber-900 font-bold'
+                                : 'bg-[#FAF7F0] border-[#CDC5B4] text-[#1F2A44] hover:bg-[#E5DFD3]'
+                            }`}
+                          >
+                            {cmd}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* No claim could be verified against the paper */}
+                  {claims.length === 0 && (
+                    <div className="p-4 rounded-lg bg-amber-50 border-2 border-amber-300 text-amber-900 font-mono text-xs space-y-1.5">
+                      <div className="font-bold uppercase tracking-wider">
+                        No claim could be verified against the paper
+                      </div>
+                      {extractionIssues.length > 0 ? (
+                        <ul className="list-disc list-inside space-y-0.5">
+                          {extractionIssues.map((issue, i) => (
+                            <li key={i}>{issue}</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p>Claim extraction returned nothing for this paper.</p>
+                      )}
+                      <p className="text-[11px]">
+                        A claim is only accepted when its quote appears verbatim in the paper
+                        text. Nothing has been invented to fill the gap: add the metric and the
+                        reported value yourself, or stop at triage.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Confirm error from the server */}
+                  {confirmError && (
+                    <div className="p-4 rounded-lg bg-red-50 border-2 border-red-300 text-red-900 font-mono text-xs">
+                      <span className="font-bold uppercase tracking-wider block mb-1">
+                        Launch rejected
+                      </span>
+                      {confirmError}
+                    </div>
+                  )}
 
                   {/* Triage block notice */}
                   {isTriageBlocked && (

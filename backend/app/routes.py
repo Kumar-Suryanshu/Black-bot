@@ -271,10 +271,30 @@ def get_claims_draft(id: str):
     state = get_project_state("data/rerun.db", id)
     if not state:
         raise HTTPException(status_code=404, detail="Project not found")
+    # Runnable command candidates, so the console never has to invent one. The plan is only
+    # produced AFTER claims are confirmed, so at this gate there is usually no planned command
+    # at all; README-documented commands and discovered entry points are real alternatives.
+    profile = state.repo_profile or {}
+    candidates: List[str] = []
+    for cmd in profile.get("readme_commands", []) or []:
+        if cmd not in candidates:
+            candidates.append(cmd)
+    for entry in profile.get("entry_points", []) or []:
+        cmd = f"python {entry}"
+        if cmd not in candidates:
+            candidates.append(cmd)
+
     return {
         "claims": [c.model_dump() for c in state.claims],
         "paper_settings": [ps.model_dump() for ps in state.paper_settings],
-        "command": state.user_command or (state.plan.command if state.plan else None)
+        "command": state.user_command or (state.plan.command if state.plan else None),
+        "command_candidates": candidates[:12],
+        # Why claim extraction produced nothing, so the console can say so instead of
+        # substituting a placeholder claim with an invented number.
+        "extraction_issues": [
+            issue for issue in state.unresolved_issues
+            if "quote not found" in issue.lower() or "claim" in issue.lower()
+        ],
     }
 
 @router.post("/api/projects/{id}/claims/confirm")

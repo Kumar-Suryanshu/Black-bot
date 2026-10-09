@@ -378,7 +378,10 @@ def handle_preflight(state: ProjectState, deps: dict):
 
     # Check safe dependency provisioning (Stage 6)
     from tools.provisioning import build_provisioning_plan, download_wheels_for_project
-    plan = build_provisioning_plan(ws, state.project_id)
+    plan = build_provisioning_plan(
+        ws, state.project_id,
+        triage_report=(state.repo_profile or {}).get("triage")
+    )
     if plan.get("status") == "NEEDS_BUILD":
         state.preflight["blockers"].append("NEEDS_BUILD")
         state.preflight["triage_verdict"] = "NEEDS_BUILD"

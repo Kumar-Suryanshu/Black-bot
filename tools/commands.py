@@ -207,10 +207,18 @@ def extract_readme_commands(readme_text: str) -> List[str]:
         for m in re.finditer(pat, readme_text, re.DOTALL):
             code_snippets.append(m.group(1))
 
+    # Inline code spans. READMEs very often document the entry point inside backticks on a
+    # prose or bullet line, e.g.
+    #     * Task 1: Ideal mass-spring system: `python3 experiment-spring/train.py --verbose`
+    # Matching only fenced blocks and lines that *begin* with an interpreter missed every one
+    # of these, so a repository with a perfectly documented command yielded no candidates.
+    inline_spans = re.findall(r"`([^`\n]{3,300})`", readme_text)
+
     # Examine all lines
     all_lines = list(readme_text.splitlines())
     for block in code_snippets:
         all_lines.extend(block.splitlines())
+    all_lines.extend(inline_spans)
 
     for line in all_lines:
         sline = line.strip()
