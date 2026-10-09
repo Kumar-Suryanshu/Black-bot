@@ -56,6 +56,12 @@ export interface Attempt {
   metrics?: Record<string, any>;
   comparison?: Comparison[];
   used_patches?: string[];
+  /** Patch ids that were live in this run, as the backend names them. */
+  patches_applied?: string[];
+  duration_s?: number | null;
+  timed_out?: boolean;
+  oom?: boolean;
+  evidence?: string[];
   log_path?: string;
 }
 
@@ -224,12 +230,32 @@ export interface EvidenceItem {
 
 export interface ReportStatement {
   id: string;
-  section: 'findings' | 'causes' | 'fixes';
+  section: 'findings' | 'causes' | 'fixes' | 'limitations' | 'not_checked';
   kind: string;
   confidence: string;
   text: string;
   evidence: string[];
 }
+
+/** A statement the report reviewer struck out, with the rule it violated. */
+export interface RemovedStatement {
+  statement_id: string;
+  section: string;
+  text: string;
+  violations: string[];
+}
+
+export interface VerificationSummary {
+  total: number;
+  verified: number;
+  removed: number;
+  summary_text: string;
+}
+
+/** Statements grouped by section, as the backend returns them. */
+export type ReportStatementGroups = Partial<
+  Record<'findings' | 'causes' | 'fixes' | 'limitations' | 'not_checked', ReportStatement[]>
+>;
 
 export interface RunComparisonPoint {
   attempt: string;
@@ -262,12 +288,18 @@ export interface ReportData {
   claims: Claim[];
   config_diff?: any[];
   evidence_ledger?: Record<string, EvidenceItem>;
-  statements?: ReportStatement[];
+  /** Grouped by section: findings / causes / fixes / limitations / not_checked. */
+  statements?: ReportStatementGroups;
+  statements_removed?: RemovedStatement[];
+  verification_summary?: VerificationSummary;
+  patches_summary?: Patch[];
   confidence_factors?: Record<string, any>;
+  /** Deterministic, always present. Rendered in place of any hardcoded caveat list. */
   limitations?: string[];
+  not_checked?: string[];
   simulated?: boolean;
   repo_url?: string;
   repo_commit?: string;
   paper_path?: string;
-  unselected_claims?: any[];
+  unselected_claims?: Claim[];
 }
