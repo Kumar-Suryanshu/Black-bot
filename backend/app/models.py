@@ -21,6 +21,10 @@ class ApprovalRequest(BaseModel):
     comment: Optional[str] = None
     edits: Optional[Any] = None
     confirm_extra: bool = False
+    # Approval ids are only unique inside one project ("A-1" in every project that reaches
+    # its first patch), so the owning project must be named explicitly. Without it the
+    # server has to guess, and a guess lands the decision on somebody else's gate.
+    project_id: Optional[str] = None
 
 class HealthResponse(BaseModel):
     ok: bool

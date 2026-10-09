@@ -126,9 +126,9 @@ export const Dashboard: React.FC = () => {
 
   // Handle human patch approval
   const handleApprovePatch = async (comment?: string, confirmExtra?: boolean) => {
-    if (!currentApprovalId) return;
+    if (!currentApprovalId || !id) return;
     try {
-      await submitApproval(currentApprovalId, 'approve', confirmExtra, comment);
+      await submitApproval(id, currentApprovalId, 'approve', confirmExtra, comment);
       setIsApprovalOpen(false);
       await loadState();
     } catch (e) {
@@ -138,9 +138,9 @@ export const Dashboard: React.FC = () => {
 
   // Handle human patch reject
   const handleRejectPatch = async (comment?: string) => {
-    if (!currentApprovalId) return;
+    if (!currentApprovalId || !id) return;
     try {
-      await submitApproval(currentApprovalId, 'reject', false, comment);
+      await submitApproval(id, currentApprovalId, 'reject', false, comment);
       setIsApprovalOpen(false);
       await loadState();
     } catch (e) {
@@ -165,8 +165,8 @@ export const Dashboard: React.FC = () => {
 
   // Handle human patch edit (D14)
   const handleEditPatch = async (edits: any[], comment?: string) => {
-    if (!currentApprovalId) return;
-    await submitApproval(currentApprovalId, 'edit', false, comment, edits);
+    if (!currentApprovalId || !id) return;
+    await submitApproval(id, currentApprovalId, 'edit', false, comment, edits);
     setIsApprovalOpen(false);
     await loadState();
   };

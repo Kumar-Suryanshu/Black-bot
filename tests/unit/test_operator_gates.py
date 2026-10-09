@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 import backend.app.routes as routes
 import backend.app.runner as runner
 from agent.state import Approval, Attempt, CriticReview, Edit, PatchProposal, ProjectState
-from backend.app.db import save_project_state
+from backend.app.db import get_project_state, save_project_state
 from backend.app.main import app
 
 client = TestClient(app)
@@ -245,3 +245,45 @@ def test_approval_with_no_candidate_patch_does_not_stall():
     state.patches = []
     loop.handle_approval(state, {})
     assert state.phase == "DIAGNOSE"
+
+
+def test_approval_ids_are_resolved_within_the_named_project():
+    """
+    Approval ids ("A-1") are only unique inside a project. The unscoped endpoint used to
+    scan every project and take the first match, so with several projects parked at A-1
+    every decision landed on the wrong one and the operator's own patch was never applied.
+    """
+    _state_with_pending_approval("P-DUP-A", banner=None, requires_extra_confirm=False)
+    _state_with_pending_approval("P-DUP-B", banner=None, requires_extra_confirm=False)
+    # Give both projects the same pending approval id.
+    for pid in ("P-DUP-A", "P-DUP-B"):
+        st = get_project_state("data/rerun.db", pid)
+        st.pending = {"kind": "approval", "id": "A-1", "patch_id": "P-1", "banner": None}
+        save_project_state("data/rerun.db", pid, st.benchmark_id, st.repo_commit, "APPROVAL", st)
+
+    try:
+        # Ambiguous without a project: refuse rather than guess.
+        ambiguous = client.post("/api/approvals/A-1", json={"decision": "approve"})
+        assert ambiguous.status_code == 409, ambiguous.json()
+
+        # Scoped: the decision lands on the project named in the path, and only that one.
+        ok = client.post("/api/projects/P-DUP-B/approvals/A-1", json={"decision": "approve"})
+        assert ok.status_code == 200, ok.json()
+
+        approved = get_project_state("data/rerun.db", "P-DUP-B")
+        assert [a.id for a in approved.approvals] == ["A-1"]
+        untouched = get_project_state("data/rerun.db", "P-DUP-A")
+        assert untouched.approvals == []
+    finally:
+        client.delete("/api/projects/P-DUP-A")
+        client.delete("/api/projects/P-DUP-B")
+
+
+def test_pending_approval_names_its_project():
+    """The client needs the project id back so it can post an unambiguous decision."""
+    _state_with_pending_approval("P-GATE-PID", banner=None, requires_extra_confirm=False)
+    try:
+        body = client.get("/api/projects/P-GATE-PID/approvals/pending").json()
+        assert body["project_id"] == "P-GATE-PID"
+    finally:
+        client.delete("/api/projects/P-GATE-PID")

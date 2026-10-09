@@ -471,6 +471,8 @@ def get_pending_approval(id: str):
 
     return {
         "approval_id": state.pending.get("id"),
+        # Approval ids repeat across projects; the client must send this back with its decision.
+        "project_id": id,
         "patch": patch.model_dump(),
         "reviews": [r.model_dump() for r in reviews],
         # Latest review, for clients that want a single object rather than the history.
@@ -491,6 +493,7 @@ def _find_project_by_pending_id(pending_id: str, db_path: str = "data/rerun.db")
     rows = cursor.fetchall()
     conn.close()
 
+    matches = []
     for proj_id, state_json in rows:
         if not state_json:
             continue
@@ -499,13 +502,33 @@ def _find_project_by_pending_id(pending_id: str, db_path: str = "data/rerun.db")
         except Exception:
             continue
         if isinstance(pending, dict) and pending.get("id") == pending_id:
-            return proj_id
+            matches.append(proj_id)
+
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        # Ambiguous: the id names a gate in several projects. Guessing one silently applies
+        # the decision to a project the operator never looked at, which is how an approved
+        # patch could sit unapplied forever while every approval landed elsewhere.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Approval id {pending_id!r} is pending in {len(matches)} projects; "
+                "name the project (POST /api/projects/{project_id}/approvals/{approval_id})"
+            ),
+        )
     return None
+
+@router.post("/api/projects/{project_id}/approvals/{approval_id}")
+def process_project_approval(project_id: str, approval_id: str, req: ApprovalRequest):
+    """Unambiguous form of the approval endpoint: the project is in the path."""
+    req.project_id = project_id
+    return process_approval(approval_id, req)
 
 @router.post("/api/approvals/{approval_id}")
 def process_approval(approval_id: str, req: ApprovalRequest):
-    # Locate the owning project without validating unrelated rows
-    target_project_id = _find_project_by_pending_id(approval_id)
+    # The caller should name the project; only fall back to a scan for older clients.
+    target_project_id = req.project_id or _find_project_by_pending_id(approval_id)
     if not target_project_id:
         raise HTTPException(status_code=404, detail="Approval not found")
 
