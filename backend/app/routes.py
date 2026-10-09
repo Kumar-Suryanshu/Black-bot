@@ -18,8 +18,8 @@ from backend.app.models import (
 from backend.app.db import get_connection, get_project_state, save_project_state
 import backend.app.runner as runner
 
-def start_project_worker(project_id: str) -> bool:
-    return runner.start_project_worker(project_id)
+def start_project_worker(project_id: str, allow_resume: bool = False) -> bool:
+    return runner.start_project_worker(project_id, allow_resume=allow_resume)
 
 def stop_project_worker(project_id: str):
     return runner.stop_project_worker(project_id)
@@ -323,8 +323,9 @@ def confirm_claims(id: str, req: ClaimsConfirmRequest):
     
     save_project_state("data/rerun.db", id, state.benchmark_id, state.repo_commit, state.phase, state)
     
-    # Resume orchestrator
-    start_project_worker(id)
+    # Resume orchestrator. This continues an existing project, so it is not subject to the
+    # cap on how many new reproductions may run at once.
+    start_project_worker(id, allow_resume=True)
     return {"status": "confirmed"}
 
 @router.post("/api/projects/{id}/claims/reject")
@@ -384,7 +385,7 @@ def approve_provisioning(id: str, req: ProvisioningApproveRequest):
     emit_event(state, "system", "provisioning_approved", f"Approved provisioning for {len(packages_to_download)} packages")
     save_project_state("data/rerun.db", id, state.benchmark_id, state.repo_commit, state.phase, state)
 
-    start_project_worker(id)
+    start_project_worker(id, allow_resume=True)
     return {
         "status": "approved",
         "downloaded_count": res.get("downloaded_count", 0),
@@ -592,7 +593,7 @@ def process_approval(approval_id: str, req: ApprovalRequest):
         state.phase = "PATCH_APPLY"
 
         save_project_state("data/rerun.db", target_project_id, state.benchmark_id, state.repo_commit, state.phase, state)
-        start_project_worker(target_project_id)
+        start_project_worker(target_project_id, allow_resume=True)
         return {"status": "applied_and_approved", "patch": patch.model_dump()}
 
     appr = Approval(
@@ -607,7 +608,7 @@ def process_approval(approval_id: str, req: ApprovalRequest):
     
     state.approvals.append(appr)
     save_project_state("data/rerun.db", target_project_id, state.benchmark_id, state.repo_commit, state.phase, state)
-    start_project_worker(target_project_id)
+    start_project_worker(target_project_id, allow_resume=True)
     return {"status": "processed"}
 
 @router.get("/api/projects/{id}/evidence")

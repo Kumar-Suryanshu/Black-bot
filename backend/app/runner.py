@@ -78,10 +78,17 @@ def run_project_thread(project_id: str):
     save_project_state("data/rerun.db", project_id, state.benchmark_id, state.repo_commit, status, state)
     logger.info(f"Worker for project {project_id} finished. Phase: {state.phase}, Pending: {state.pending}")
 
-def start_project_worker(project_id: str) -> bool:
+def start_project_worker(project_id: str, allow_resume: bool = False) -> bool:
     """
     Starts the synchronous orchestrator in a background thread.
-    Returns True if a new worker thread was started, or False if one was already running (preventing duplicate workers).
+
+    Returns True if a new worker thread was started, or False if one was already running.
+
+    `allow_resume` exempts the call from the concurrency cap. A project parked at a human
+    gate has no live worker, so resuming it looked like starting a brand new project: with
+    the cap reached, approving a patch answered "Concurrency limit reached" as a 500 and the
+    approved patch was never applied. The cap is meant to limit how many reproductions run at
+    once, not to strand work a human has already authorised.
     """
     with _RUNNING_WORKERS_LOCK:
         t = _RUNNING_WORKERS.get(project_id)
@@ -90,7 +97,7 @@ def start_project_worker(project_id: str) -> bool:
             return False
 
         active = [p for p, th in _RUNNING_WORKERS.items() if th.is_alive()]
-        if len(active) >= MAX_CONCURRENT_PROJECTS and project_id not in active:
+        if not allow_resume and len(active) >= MAX_CONCURRENT_PROJECTS and project_id not in active:
             logger.warning(f"Concurrency limit ({MAX_CONCURRENT_PROJECTS}) reached. Active projects: {active}")
             raise RuntimeError(f"Concurrency limit reached ({MAX_CONCURRENT_PROJECTS}). Active projects: {len(active)}")
 

@@ -567,9 +567,20 @@ def download_wheels_for_project(
         try:
             import docker
             client = docker.from_env()
+            # Download ONLY what is still missing. Passing the full requirements file made
+            # pip re-fetch packages already copied from the shared wheelhouse, and fetch them
+            # from the default index: for torch that means the CUDA build and its
+            # multi-gigabyte nvidia dependencies rather than the CPU wheel already present.
+            # A provisioning step that should take seconds stalled for many minutes.
+            missing_file = dest_wheelhouse / "requirements.missing.txt"
+            with open(missing_file, "w", encoding="utf-8") as mf:
+                for pkg in remaining:
+                    mf.write(f"{pkg}\n")
+            logs.append(f"Downloading only the missing packages: {remaining}")
+
             container_log = client.containers.run(
                 image=python_image,
-                command=["pip", "download", "--only-binary=:all:", "-d", "/wheelhouse", "-r", "/wheelhouse/requirements.provision.txt"],
+                command=["pip", "download", "--only-binary=:all:", "-d", "/wheelhouse", "-r", "/wheelhouse/requirements.missing.txt"],
                 volumes={
                     str(dest_wheelhouse): {"bind": "/wheelhouse", "mode": "rw"}
                 },

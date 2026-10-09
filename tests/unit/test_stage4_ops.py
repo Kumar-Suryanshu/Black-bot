@@ -295,7 +295,7 @@ def test_approval_edit_policy_violation_rejected(tmp_path):
 
 def test_approval_edit_valid_applied(tmp_path, monkeypatch):
     """Gate: Valid edited patch passes policy, re-runs Critic review, and applies (D14)."""
-    monkeypatch.setattr("backend.app.runner.start_project_worker", lambda pid: True)
+    monkeypatch.setattr("backend.app.runner.start_project_worker", lambda pid, **kw: True)
 
     proj_id = "P-APPR-VALID"
     ws_dir = tmp_path / "workspace_valid"

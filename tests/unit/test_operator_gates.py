@@ -32,8 +32,8 @@ client = TestClient(app)
 @pytest.fixture(autouse=True)
 def no_background_workers(monkeypatch):
     """These tests exercise the HTTP contract, not the orchestrator thread."""
-    monkeypatch.setattr(runner, "start_project_worker", lambda pid: True)
-    monkeypatch.setattr(routes, "start_project_worker", lambda pid: True)
+    monkeypatch.setattr(runner, "start_project_worker", lambda pid, **kw: True)
+    monkeypatch.setattr(routes, "start_project_worker", lambda pid, **kw: True)
 
 
 def _state_with_pending_approval(project_id: str, banner, requires_extra_confirm: bool):
