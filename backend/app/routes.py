@@ -440,7 +440,11 @@ def stream_events(id: str, request: Request, last_event_id: Optional[str] = Head
         last_id = int(raw_id)
     except (ValueError, TypeError):
         last_id = 0
-    return StreamingResponse(stream_manager.event_generator(id, last_id), media_type="text/event-stream")
+    return StreamingResponse(
+        stream_manager.event_generator(id, last_id, request=request),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 @router.get("/api/projects/{id}/approvals/pending")
 def get_pending_approval(id: str):

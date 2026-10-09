@@ -21,8 +21,43 @@ class CorruptProjectStateError(Exception):
         self.detail = detail
         super().__init__(f"Corrupt persisted state for project '{project_id}': {detail}")
 
+# Process-wide redirect for the database location.
+#
+# Every database path in the application is the literal "data/rerun.db", passed down to
+# get_connection. The test suite therefore wrote to, and in one case deleted, the real
+# database that the running app uses, destroying live projects on every full test run.
+# Routing all connections through one resolver lets the suite redirect itself to a scratch
+# database without touching 50 call sites.
+_DB_PATH_OVERRIDE: Optional[str] = None
+
+def set_db_path_override(path: Optional[str]) -> None:
+    """Redirect every subsequent connection. Pass None to restore normal behaviour."""
+    global _DB_PATH_OVERRIDE
+    _DB_PATH_OVERRIDE = path
+
+PRODUCTION_DB_PATH = "data/rerun.db"
+
+def resolve_db_path(db_path: str = PRODUCTION_DB_PATH) -> str:
+    """
+    The database a caller should actually use.
+
+    Only the production path is redirected. A caller that names an explicit database, as
+    most tests do with a tmp_path, must get exactly the database it asked for.
+    """
+    target = _DB_PATH_OVERRIDE or os.getenv("RERUN_DB_PATH")
+    if not target:
+        return db_path
+    try:
+        is_production = os.path.normpath(db_path) == os.path.normpath(PRODUCTION_DB_PATH)
+    except Exception:
+        is_production = db_path == PRODUCTION_DB_PATH
+    return target if is_production else db_path
+
 def get_connection(db_path="data/rerun.db"):
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    db_path = resolve_db_path(db_path)
+    parent = os.path.dirname(db_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
@@ -81,7 +116,17 @@ def init_db(db_path="data/rerun.db"):
     ''')
     conn.commit()
     conn.close()
-    repair_unknown_error_classes(db_path)
+
+    # Run the one-off repair at most once per database per process. init_db is called from
+    # insert_evidence, so running a full table scan plus a JSON parse of every project's
+    # state (reports included) on each evidence write made the API progressively slower.
+    resolved = resolve_db_path(db_path)
+    if resolved not in _REPAIRED_DATABASES:
+        _REPAIRED_DATABASES.add(resolved)
+        repair_unknown_error_classes(db_path)
+
+# Databases already swept by the error_class repair in this process.
+_REPAIRED_DATABASES: set = set()
 
 def repair_unknown_error_classes(db_path: str = "data/rerun.db") -> int:
     """
