@@ -217,15 +217,19 @@ export interface BenchmarkCase {
 
 export interface EvidenceItem {
   id: string;
-  type: 'log' | 'file' | 'config' | 'package_query' | 'result' | 'paper';
-  artifact_path: string;
+  type?: 'log' | 'file' | 'config' | 'package_query' | 'result' | 'paper';
+  artifact_path?: string;
   line_start?: number | null;
   line_end?: number | null;
-  sha256: string;
-  excerpt: string;
-  created_by_tool: string;
-  tool_call_id: string;
-  ts: string;
+  sha256?: string;
+  excerpt?: string;
+  created_by_tool?: string;
+  tool_call_id?: string;
+  ts?: string;
+  /** False when the agent recorded this id but neither store can serve the artifact. */
+  available?: boolean;
+  /** Which store the entry came from: the database or the on-disk ledger. */
+  source?: 'db' | 'ledger';
 }
 
 export interface ReportStatement {

@@ -25,6 +25,7 @@ import { Footer } from '../components/layout/Footer';
 import { Stamp } from '../components/ui/Stamp';
 import { EvidenceChip } from '../components/ui/EvidenceChip';
 import { EvidenceDrawer } from '../components/ui/EvidenceDrawer';
+import { EvidenceLedger } from '../components/dashboard/EvidenceLedger';
 import { fetchReport, fetchReportMarkdown } from '../../src/api/client';
 import type { ReportData } from '../../src/api/types';
 
@@ -689,6 +690,19 @@ export const Report: React.FC = () => {
             </div>
           </section>
         )}
+
+        {/* SECTION 3b: EVIDENCE LEDGER — the chain of custody behind every statement above. */}
+        <section className="bg-[#FAF7F0] border border-[#CDC5B4] rounded-xl p-6 sm:p-8 space-y-4 shadow-sm font-mono text-xs text-[#1F2A44]">
+          <div className="space-y-1.5">
+            <span className="text-rust font-bold uppercase tracking-[0.2em] text-[11px]">
+              3. Chain Of Custody
+            </span>
+            <h2 className="font-serif text-xl uppercase tracking-wide text-[#1F2A44]">
+              Evidence Ledger
+            </h2>
+          </div>
+          <EvidenceLedger projectId={id || ''} onSelectEvidence={setSelectedEvidenceId} bare />
+        </section>
 
         {/* SECTION 4: LIMITS AND WHAT WAS NOT CHECKED
             These are the backend's per-project lists. They used to be three hardcoded

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AlertTriangle, Check, X, FileEdit, Edit3 } from 'lucide-react';
+import { AlertTriangle, Check, X, FileEdit, Edit3, Scale } from 'lucide-react';
 import type { Patch, CriticReview } from '../../api/types';
 import { CriticPanel } from './CriticPanel';
 import { EvidenceChip } from '../ui/EvidenceChip';
@@ -141,6 +141,65 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
                 Banner flagged: <span className="font-mono text-[#1F2A44] font-bold underline">{banner}</span>. Proceed with heightened scrutiny.
               </p>
             </div>
+          </div>
+        )}
+
+        {/* Policy verdict — deterministic, and above the critic in the authority chain.
+            It was computed for every patch and shown nowhere, so the human approving a
+            patch could not see which rules had passed or what had been flagged. */}
+        {patch.policy_result && (
+          <div
+            className={`p-3.5 rounded-lg border space-y-2 text-[11px] ${
+              patch.policy_result.passed
+                ? 'bg-[#F4F1E8] border-[#CDC5B4] text-[#1F2A44]'
+                : 'bg-red-50 border-red-300 text-red-900'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <Scale className="w-4 h-4 shrink-0" />
+              <span className="font-bold uppercase tracking-wider">
+                Policy check (deterministic)
+              </span>
+              <span
+                className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                  patch.policy_result.passed
+                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                    : 'bg-red-100 text-red-800 border border-red-300'
+                }`}
+              >
+                {patch.policy_result.passed ? 'passed' : 'failed'}
+              </span>
+              {patch.policy_result.risk_class && (
+                <span className="font-mono text-[10px] text-[#4A5470]">
+                  {patch.policy_result.risk_class}
+                </span>
+              )}
+            </div>
+
+            {patch.policy_result.violations && patch.policy_result.violations.length > 0 && (
+              <div>
+                <span className="font-bold">Violations:</span>
+                <ul className="list-disc list-inside leading-relaxed">
+                  {patch.policy_result.violations.map((v, i) => (
+                    <li key={`pv-${i}`}>{typeof v === 'string' ? v : JSON.stringify(v)}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {patch.policy_result.flags && patch.policy_result.flags.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="font-bold">Flags:</span>
+                {patch.policy_result.flags.map((f, i) => (
+                  <span
+                    key={`pf-${i}`}
+                    className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-bold"
+                  >
+                    {typeof f === 'string' ? f : JSON.stringify(f)}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         )}
 

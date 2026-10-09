@@ -6,15 +6,23 @@ interface BudgetBarProps {
   budgets?: ProjectBudgets;
 }
 
+/**
+ * The limits come from the server, which reads them from agent.config.
+ *
+ * They used to be hardcoded here as 40 and 3. Those are only the defaults: MAX_STEPS and
+ * MAX_PATCHES are environment-configurable, so a differently-configured deployment showed
+ * a denominator the orchestrator was not enforcing. When the server sends no limit, the
+ * bar shows the count alone rather than inventing one.
+ */
 export const BudgetBar: React.FC<BudgetBarProps> = ({ budgets }) => {
   const stepsUsed = budgets?.steps_used || 0;
-  const maxSteps = budgets?.max_steps || 40;
   const patchesUsed = budgets?.patches_used || 0;
-  const maxPatches = budgets?.max_patches || 3;
+  const maxSteps = budgets?.max_steps ?? null;
+  const maxPatches = budgets?.max_patches ?? null;
 
-  const stepPct = Math.min(100, Math.round((stepsUsed / maxSteps) * 100));
-  const patchPct = Math.min(100, Math.round((patchesUsed / maxPatches) * 100));
-  const isStepWarning = stepPct >= 80;
+  const stepPct = maxSteps ? Math.min(100, Math.round((stepsUsed / maxSteps) * 100)) : 0;
+  const patchPct = maxPatches ? Math.min(100, Math.round((patchesUsed / maxPatches) * 100)) : 0;
+  const isStepWarning = maxSteps !== null && stepPct >= 80;
 
   return (
     <div className="flex flex-wrap items-center gap-6 text-xs font-mono bg-[#FAF7F0] border border-[#CDC5B4] rounded-lg px-4 py-2.5 shadow-sm text-[#1F2A44]">
@@ -23,9 +31,10 @@ export const BudgetBar: React.FC<BudgetBarProps> = ({ budgets }) => {
         <div className="flex items-center justify-between w-full">
           <span className="text-[#4A5470]">Step Budget:</span>
           <span className={`font-semibold ${isStepWarning ? 'text-amber-700' : 'text-[#1F2A44]'}`}>
-            {stepsUsed} / {maxSteps}
+            {stepsUsed}{maxSteps !== null ? ` / ${maxSteps}` : ''}
           </span>
         </div>
+        {maxSteps !== null && (
         <div className="w-24 h-2 bg-[#E5DFD3] rounded-full overflow-hidden border border-[#CDC5B4]">
           <div
             className={`h-full transition-all duration-300 rounded-full ${
@@ -34,6 +43,7 @@ export const BudgetBar: React.FC<BudgetBarProps> = ({ budgets }) => {
             style={{ width: `${stepPct}%` }}
           />
         </div>
+        )}
       </div>
 
       {/* Patches gauge */}
@@ -41,15 +51,17 @@ export const BudgetBar: React.FC<BudgetBarProps> = ({ budgets }) => {
         <div className="flex items-center justify-between w-full">
           <span className="text-[#4A5470]">Patch Budget:</span>
           <span className="text-[#1F2A44] font-semibold">
-            {patchesUsed} / {maxPatches}
+            {patchesUsed}{maxPatches !== null ? ` / ${maxPatches}` : ''}
           </span>
         </div>
+        {maxPatches !== null && (
         <div className="w-20 h-2 bg-[#E5DFD3] rounded-full overflow-hidden border border-[#CDC5B4]">
           <div
             className="h-full bg-teal-600 transition-all duration-300 rounded-full"
             style={{ width: `${patchPct}%` }}
           />
         </div>
+        )}
       </div>
 
       {isStepWarning && (

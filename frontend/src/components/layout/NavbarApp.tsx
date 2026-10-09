@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, FileCheck2, AlertOctagon } from 'lucide-react';
+import { LayoutDashboard, FileCheck2, AlertOctagon, Power } from 'lucide-react';
 import { HealthDots } from '../ui/HealthDots';
-import { abortProject } from '../../api/client';
+import { abortProject, killSwitch } from '../../api/client';
 
 interface NavbarAppProps {
   projectId?: string;
@@ -24,9 +24,28 @@ export const NavbarApp: React.FC<NavbarAppProps> = ({
   const location = useLocation();
   const [isAborting, setIsAborting] = useState(false);
   const [showConfirmAbort, setShowConfirmAbort] = useState(false);
+  const [showConfirmKill, setShowConfirmKill] = useState(false);
+  const [isKilling, setIsKilling] = useState(false);
+  const [killError, setKillError] = useState<string | null>(null);
 
   const isDashboardActive = projectId ? location.pathname === `/p/${projectId}` : false;
   const isReportActive = projectId ? location.pathname === `/p/${projectId}/report` : false;
+
+  // Global emergency stop. Destructive and not scoped to this project, so it is always
+  // behind an explicit confirmation -- the same two-step shape as Abort.
+  const handleKillSwitch = async () => {
+    setIsKilling(true);
+    setKillError(null);
+    try {
+      await killSwitch();
+      setShowConfirmKill(false);
+      window.location.reload();
+    } catch (err: any) {
+      setKillError(err?.message || 'Kill switch failed');
+    } finally {
+      setIsKilling(false);
+    }
+  };
 
   const handleAbort = async () => {
     if (!projectId) return;
@@ -126,6 +145,15 @@ export const NavbarApp: React.FC<NavbarAppProps> = ({
 
           <HealthDots />
 
+          <button
+            onClick={() => setShowConfirmKill(true)}
+            className="flex items-center gap-1 px-2.5 py-1 rounded bg-red-600 hover:bg-red-700 text-white border border-red-800 text-xs font-mono font-bold uppercase tracking-wider transition-colors shadow-sm"
+            title="Stop every running project and kill all sandbox containers"
+          >
+            <Power className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Stop All</span>
+          </button>
+
           {projectId && phase !== 'DONE' && (
             <button
               onClick={() => setShowConfirmAbort(true)}
@@ -138,6 +166,40 @@ export const NavbarApp: React.FC<NavbarAppProps> = ({
           )}
         </div>
       </div>
+
+      {/* Global kill-switch confirmation */}
+      {showConfirmKill && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-[#FAF7F0] border-2 border-red-400 rounded-xl p-6 max-w-sm w-full mx-4 shadow-2xl space-y-4 text-[#1F2A44] font-mono">
+            <h3 className="text-base font-serif uppercase tracking-wide text-red-800 font-bold">
+              Stop Everything?
+            </h3>
+            <p className="text-xs text-[#4A5470] leading-relaxed font-sans">
+              This terminates <strong>every running project</strong>, not just this one, and
+              kills all sandbox containers. Projects stop where they are and can be resumed
+              from their last saved state.
+            </p>
+            {killError && (
+              <p className="text-xs text-red-700 font-bold">{killError}</p>
+            )}
+            <div className="flex items-center justify-end gap-3 pt-2 font-mono">
+              <button
+                onClick={() => { setShowConfirmKill(false); setKillError(null); }}
+                className="px-3.5 py-1.5 rounded-lg text-xs text-[#4A5470] hover:bg-[#E5DFD3] transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleKillSwitch}
+                disabled={isKilling}
+                className="px-3.5 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white font-bold text-xs uppercase tracking-wider transition-colors shadow-sm disabled:opacity-60"
+              >
+                {isKilling ? 'Stopping…' : 'Stop All Projects'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Abort confirmation dialog */}
       {showConfirmAbort && (

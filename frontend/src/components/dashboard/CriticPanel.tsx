@@ -1,5 +1,5 @@
 import React from 'react';
-import { Check, X, ShieldCheck, AlertTriangle } from 'lucide-react';
+import { Check, X, ShieldCheck, AlertTriangle, ListChecks } from 'lucide-react';
 import type { CriticReview } from '../../api/types';
 
 interface CriticPanelProps {
@@ -86,6 +86,23 @@ export const CriticPanel: React.FC<CriticPanelProps> = ({ review }) => {
           <ul className="list-disc list-inside space-y-0.5 text-[11px]">
             {review.objections.map((obj, i) => (
               <li key={i}>{obj}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* What the critic demanded before it would support the patch. Recorded on every
+          review and never rendered, so a NEEDS_REVISION verdict gave the operator the
+          objection but not the remedy. */}
+      {review.required_changes && review.required_changes.length > 0 && (
+        <div className="p-3 rounded bg-amber-50 border border-amber-300 space-y-1 text-amber-900">
+          <div className="flex items-center gap-1.5 font-bold text-amber-800">
+            <ListChecks className="w-3.5 h-3.5" />
+            <span>Required Changes:</span>
+          </div>
+          <ul className="list-disc list-inside space-y-0.5 text-[11px]">
+            {review.required_changes.map((req, i) => (
+              <li key={`rc-${i}`}>{req}</li>
             ))}
           </ul>
         </div>
