@@ -186,3 +186,71 @@ def test_provisioning_gate_is_not_raised_when_nothing_is_needed(tmp_path):
 
     assert state.pending is None
     assert state.phase == "SETUP"
+
+
+# ---------------------------------------------------------------------------
+# Operator-supplied claims
+#
+# Claim extraction only accepts a quote found verbatim in the paper, which is what stops a
+# hallucinated number being treated as verified. For the Hamiltonian Neural Networks paper
+# every candidate was rejected, because the results live in Table 1 and PyMuPDF's
+# find_tables() does not recover it: the cells end up flattened one per line, so no natural
+# sentence quoting a row exists verbatim.
+#
+# The rejection is correct. The dead end was not: the console said "add the metric and the
+# reported value yourself" while offering no way to do it. An operator-supplied claim is
+# recorded as such so the distinction survives into the report.
+# ---------------------------------------------------------------------------
+
+def test_operator_supplied_claim_is_accepted_and_marked_unverified():
+    from agent.state import Claim
+
+    claim = Claim(
+        id="C-1", statement="Energy MSE on the ideal mass-spring task",
+        metric="energy_mse", reported=0.38, result_key="energy_mse",
+        source_ref="operator-supplied", source_quote="",
+        quote_verified=False, verified_in_paper=False,
+        primary=True, confirmed_by_human=True,
+    )
+    assert claim.quote_verified is False
+    assert claim.verified_in_paper is False
+    # It must still round-trip through persistence like any other claim.
+    assert Claim.model_validate_json(claim.model_dump_json()).reported == 0.38
+
+
+def test_report_discloses_that_a_claim_was_operator_supplied():
+    """A report must never present an operator's value as verified from the paper."""
+    from agent.state import Attempt, Claim, ProjectState, Tolerance
+    from tools.report import generate_report
+
+    state = ProjectState(
+        project_id="p_operator_claim", benchmark_id="custom", repo_commit="c",
+        phase="STATUS", budgets={}, paper_settings=[], repo_profile={},
+        claims=[Claim(
+            id="C-1", statement="Energy MSE", metric="energy_mse", reported=0.38,
+            tolerance=Tolerance(type="abs", value=0.1), result_key="energy_mse",
+            source_ref="operator-supplied", source_quote="",
+            quote_verified=False, verified_in_paper=False,
+            primary=True, selected=True, confirmed_by_human=True,
+        )],
+    )
+    state.attempts = [Attempt(n=1, patches_applied=[], exit_code=1, started_at="now")]
+    state.final = {"status": "UNABLE_TO_EXECUTE", "reason": "run failed", "after_n_fixes": 0}
+
+    report = generate_report(state)
+    assert "operator-supplied" in report["markdown"], (
+        "report does not disclose that the claim came from the operator"
+    )
+    assert report["claims"][0]["quote_verified"] is False
+
+
+def test_a_verified_claim_is_still_marked_verified():
+    """The provenance flag must distinguish the two cases, not blanket everything."""
+    from agent.state import Claim
+
+    verified = Claim(
+        id="C-1", statement="x", metric="test_loss", reported=0.037,
+        source_ref="p.5", source_quote="37 ± 2",
+    )
+    assert verified.quote_verified is True
+    assert verified.verified_in_paper is True

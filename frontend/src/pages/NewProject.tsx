@@ -313,6 +313,39 @@ export const NewProject: React.FC = () => {
   const triageBlockReason: string =
     triageReport?.reason || (triageBlockers.length ? triageBlockers.join(', ') : '');
 
+  // Adds an operator-supplied claim.
+  //
+  // Extraction only accepts a claim whose quote appears verbatim in the paper, which is the
+  // right rule: it is what stops a hallucinated number being verified. But when every
+  // candidate is rejected there has to be a way forward, otherwise the gate is a dead end.
+  // A claim added here is recorded as operator-supplied, not as verified from the paper, so
+  // the distinction survives into the report.
+  const handleAddClaim = () => {
+    setConfirmError(null);
+    setClaims((prev) => [
+      ...prev,
+      {
+        id: `C-${prev.length + 1}`,
+        statement: '',
+        metric: '',
+        reported: 0,
+        tolerance: { type: 'abs', value: 0.01 },
+        result_key: '',
+        source_ref: 'operator-supplied',
+        source_quote: '',
+        quote_verified: false,
+        verified_in_paper: false,
+        primary: prev.length === 0,
+        selected: true,
+        confirmed_by_human: false,
+      } as Claim,
+    ]);
+  };
+
+  const handleRemoveClaim = (idx: number) => {
+    setClaims((prev) => prev.filter((_, i) => i !== idx));
+  };
+
   // Step 2 Confirm Claims
   const handleConfirmClaims = async () => {
     if (!projectId) return;
@@ -330,8 +363,18 @@ export const NewProject: React.FC = () => {
     }
     if (claims.length === 0) {
       setConfirmError(
-        'No claim to verify. Add a claim with the metric and the value the paper reports, ' +
-          'or stop at triage.'
+        'No claim to verify. Use "Add a claim manually" to enter the metric and the value ' +
+          'the paper reports, or stop at triage.'
+      );
+      return;
+    }
+    const incomplete = claims.find(
+      (c) => !String(c.metric || c.result_key || '').trim() || !Number.isFinite(Number(c.reported))
+    );
+    if (incomplete) {
+      setConfirmError(
+        `Claim ${incomplete.id} is incomplete. Give it a metric key and the numeric value the ` +
+          'paper reports.'
       );
       return;
     }
@@ -861,7 +904,13 @@ export const NewProject: React.FC = () => {
                       <span className="font-bold uppercase tracking-wider text-ink">
                         1. Extracted Paper Claims (Editable):
                       </span>
-                      <span className="text-[11px] text-ink-soft">Review reported value & tolerance</span>
+                      <button
+                        type="button"
+                        onClick={handleAddClaim}
+                        className="px-3 py-1.5 rounded border border-kraft bg-[#FAF7F0] hover:bg-[#E5DFD3] text-[11px] font-bold uppercase tracking-wider text-ink transition-colors"
+                      >
+                        + Add a claim manually
+                      </button>
                     </div>
 
                     <div className="overflow-x-auto bg-[#FFFFFF] rounded-lg border border-kraft shadow-sm">
@@ -873,6 +922,8 @@ export const NewProject: React.FC = () => {
                             <th className="py-2.5 px-4">Metric Key</th>
                             <th className="py-2.5 px-4">Reported Value</th>
                             <th className="py-2.5 px-4">Tolerance</th>
+                            <th className="py-2.5 px-4">Provenance</th>
+                            <th className="py-2.5 px-4"></th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-kraft/50">
@@ -892,7 +943,21 @@ export const NewProject: React.FC = () => {
                                 />
                               </td>
                               <td className="py-3 px-4 font-mono text-xs text-ink-soft">
-                                {c.result_key || 'test_accuracy_mean'}
+                                <input
+                                  type="text"
+                                  value={c.result_key || c.metric || ''}
+                                  placeholder="e.g. test_loss"
+                                  onChange={(e) => {
+                                    const updated = [...claims];
+                                    updated[idx] = {
+                                      ...updated[idx],
+                                      result_key: e.target.value,
+                                      metric: e.target.value,
+                                    };
+                                    setClaims(updated);
+                                  }}
+                                  className="w-36 bg-[#F4F1E8] border border-kraft rounded px-2 py-1 text-xs text-ink focus:outline-none focus:border-rust"
+                                />
                               </td>
                               <td className="py-3 px-4">
                                 <input
@@ -908,9 +973,55 @@ export const NewProject: React.FC = () => {
                                 />
                               </td>
                               <td className="py-3 px-4">
-                                <span className="font-mono text-xs text-ink font-semibold">
-                                  ± {c.tolerance?.value ?? 0.01} ({c.tolerance?.type ?? 'abs'})
-                                </span>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-mono text-xs text-ink">±</span>
+                                  <input
+                                    type="number"
+                                    step="0.001"
+                                    value={c.tolerance?.value ?? 0.01}
+                                    onChange={(e) => {
+                                      const updated = [...claims];
+                                      updated[idx] = {
+                                        ...updated[idx],
+                                        tolerance: {
+                                          type: updated[idx].tolerance?.type ?? 'abs',
+                                          value: parseFloat(e.target.value),
+                                        },
+                                      };
+                                      setClaims(updated);
+                                    }}
+                                    className="w-20 bg-[#F4F1E8] border border-kraft rounded px-2 py-1 font-mono text-xs text-ink focus:outline-none focus:border-rust"
+                                  />
+                                  <span className="text-[10px] text-ink-soft">
+                                    {c.tolerance?.type ?? 'abs'}
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="py-3 px-4">
+                                {c.quote_verified === false ? (
+                                  <span
+                                    className="text-[10px] font-bold uppercase tracking-wider text-amber-800"
+                                    title="Supplied by the operator; not verified against the paper text"
+                                  >
+                                    operator
+                                  </span>
+                                ) : (
+                                  <span
+                                    className="text-[10px] font-bold uppercase tracking-wider text-emerald-700"
+                                    title="Quote found verbatim in the paper"
+                                  >
+                                    verified
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3 px-4">
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveClaim(idx)}
+                                  className="text-[11px] text-fail hover:underline"
+                                >
+                                  remove
+                                </button>
                               </td>
                             </tr>
                           ))}
@@ -1015,8 +1126,12 @@ export const NewProject: React.FC = () => {
                       )}
                       <p className="text-[11px]">
                         A claim is only accepted when its quote appears verbatim in the paper
-                        text. Nothing has been invented to fill the gap: add the metric and the
-                        reported value yourself, or stop at triage.
+                        text, which is what stops an invented number being treated as verified.
+                        Nothing has been substituted here. Use{' '}
+                        <strong>“+ Add a claim manually”</strong> in the claims table below to
+                        enter the metric and the value the paper reports, or stop at triage.
+                        A claim you add is recorded as operator-supplied, not as verified from
+                        the paper.
                       </p>
                     </div>
                   )}

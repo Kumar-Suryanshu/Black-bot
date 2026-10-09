@@ -15,6 +15,11 @@ export interface Claim {
   source_quote: string;
   primary?: boolean;
   confirmed_by_human?: boolean;
+  // False when the claim was supplied by the operator rather than matched verbatim in the
+  // paper. Kept distinct so the report never presents an operator value as paper-verified.
+  quote_verified?: boolean;
+  verified_in_paper?: boolean;
+  selected?: boolean;
 }
 
 export interface PaperSetting {
