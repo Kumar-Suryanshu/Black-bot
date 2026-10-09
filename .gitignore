@@ -5,17 +5,64 @@ __pycache__/
 *.so
 .pytest_cache/
 
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python build / packaging artifacts
+build/
+*.egg-info/
+.eggs/
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
 # Local configuration and credentials
 .env
+.env.local
 data/
 wheelhouse/
 
 # Frontend dependencies and builds
 node_modules/
 frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
 
 # Scratch & test outputs
 pytest_out*.txt
 calibration_workspace/
 powershell.cmd
 frontend/powershell.cmd
+
+# Generated run artifacts
+# Run workspaces, logs, evidence snapshots and outputs all live under data/ (ignored above).
+# These patterns cover artifacts that can land outside it.
+*.log
+rerun_kit_*.zip
+
+# Benchmark run records. benchmarks/MEASURED.md is the canonical tracked artifact; the
+# timestamped per-run directories are regenerated on every `make bench` invocation.
+# Records already committed stay tracked; this only stops new ones accumulating.
+benchmarks/results/
+
+# Patch / merge leftovers
+*.orig
+*.rej
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*~
+
+# Scratch run artifacts created by the test suite (see tests/conftest.py)
+data/.pytest-runs/

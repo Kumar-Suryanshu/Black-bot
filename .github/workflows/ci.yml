@@ -34,7 +34,7 @@ jobs:
           ALLOW_FAKE_SANDBOX: "1"
           LLM_MODE: replay
         run: |
-          pytest tests/unit tests/agent tests/security tests/e2e -v
+          pytest tests/unit tests/agent tests/security tests/e2e tests/integration -v
 
   frontend-build:
     name: Frontend TypeScript & Vite Build

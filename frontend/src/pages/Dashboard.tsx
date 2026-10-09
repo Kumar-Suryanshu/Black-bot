@@ -8,6 +8,7 @@ import { Terminal } from '../components/dashboard/Terminal';
 import { DiffView } from '../components/dashboard/DiffView';
 import { AttemptsTable } from '../components/dashboard/AttemptsTable';
 import { ApprovalModal } from '../components/dashboard/ApprovalModal';
+import { ProvisioningModal } from '../components/dashboard/ProvisioningModal';
 import { EvidenceDrawer } from '../components/ui/EvidenceDrawer';
 import { Footer } from '../components/layout/Footer';
 import { useEventStream } from '../hooks/useEventStream';
@@ -16,6 +17,8 @@ import {
   fetchPendingApproval,
   submitApproval,
   fetchRunLog,
+  approveProvisioning,
+  rejectProvisioning,
 } from '../api/client';
 import type {
   ProjectStateSummary,
@@ -40,6 +43,11 @@ export const Dashboard: React.FC = () => {
   const [approvalBanner, setApprovalBanner] = useState<string | null>(null);
   const [requiresExtraConfirm, setRequiresExtraConfirm] = useState(false);
 
+  // Provisioning gate state. The orchestrator and the API have always had this gate; the
+  // console never rendered it, so a project whose preflight proposed a provisioning plan
+  // parked at PREFLIGHT with no way to approve and never progressed.
+  const [isProvisioningOpen, setIsProvisioningOpen] = useState(false);
+
   // Evidence Drawer state
   const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null);
 
@@ -58,13 +66,23 @@ export const Dashboard: React.FC = () => {
         const appData = await fetchPendingApproval(id);
         setCurrentApprovalId(appData.approval_id);
         setCurrentPatch(appData.patch);
-        setCriticReview(appData.critic_review);
+        // Latest review from the history, falling back to the single-object form.
+        const latestReview =
+          appData.reviews && appData.reviews.length > 0
+            ? appData.reviews[appData.reviews.length - 1]
+            : appData.critic_review ?? null;
+        setCriticReview(latestReview);
         setApprovalBanner(appData.banner);
-        setRequiresExtraConfirm(appData.requires_extra_confirm);
+        // A banner always requires explicit confirmation, even if the server omits the flag.
+        setRequiresExtraConfirm(
+          Boolean(appData.requires_extra_confirm || appData.banner)
+        );
         setIsApprovalOpen(true);
       } else {
         setIsApprovalOpen(false);
       }
+
+      setIsProvisioningOpen(data.pending?.kind === 'provisioning');
 
       // Load active run log
       const attemptsCount = data.attempts?.length || 0;
@@ -108,9 +126,9 @@ export const Dashboard: React.FC = () => {
 
   // Handle human patch approval
   const handleApprovePatch = async (comment?: string, confirmExtra?: boolean) => {
-    if (!currentApprovalId) return;
+    if (!currentApprovalId || !id) return;
     try {
-      await submitApproval(currentApprovalId, 'approve', confirmExtra, comment);
+      await submitApproval(id, currentApprovalId, 'approve', confirmExtra, comment);
       setIsApprovalOpen(false);
       await loadState();
     } catch (e) {
@@ -120,9 +138,9 @@ export const Dashboard: React.FC = () => {
 
   // Handle human patch reject
   const handleRejectPatch = async (comment?: string) => {
-    if (!currentApprovalId) return;
+    if (!currentApprovalId || !id) return;
     try {
-      await submitApproval(currentApprovalId, 'reject', false, comment);
+      await submitApproval(id, currentApprovalId, 'reject', false, comment);
       setIsApprovalOpen(false);
       await loadState();
     } catch (e) {
@@ -130,10 +148,25 @@ export const Dashboard: React.FC = () => {
     }
   };
 
+  // Handle the dependency provisioning gate
+  const handleApproveProvisioning = async () => {
+    if (!id) return;
+    await approveProvisioning(id);
+    setIsProvisioningOpen(false);
+    await loadState();
+  };
+
+  const handleRejectProvisioning = async () => {
+    if (!id) return;
+    await rejectProvisioning(id);
+    setIsProvisioningOpen(false);
+    await loadState();
+  };
+
   // Handle human patch edit (D14)
   const handleEditPatch = async (edits: any[], comment?: string) => {
-    if (!currentApprovalId) return;
-    await submitApproval(currentApprovalId, 'edit', false, comment, edits);
+    if (!currentApprovalId || !id) return;
+    await submitApproval(id, currentApprovalId, 'edit', false, comment, edits);
     setIsApprovalOpen(false);
     await loadState();
   };
@@ -147,7 +180,10 @@ export const Dashboard: React.FC = () => {
     );
   }
 
-  const isReportReady = state?.phase === 'DONE' || Boolean(state?.final);
+  // Offer the report the moment one exists. Gating on phase === 'DONE' meant the operator
+  // waited through the optional statement-enrichment call with no way to reach the report.
+  const isReportReady =
+    state?.phase === 'DONE' || Boolean(state?.report_available) || Boolean(state?.final);
   const activePatch =
     state?.patches && state.patches.length > 0
       ? state.patches[state.patches.length - 1]
@@ -246,6 +282,17 @@ export const Dashboard: React.FC = () => {
           onSelectEvidence={(eid) => setSelectedEvidenceId(eid)}
         />
       )}
+
+      {/* Dependency Provisioning Gate */}
+      <ProvisioningModal
+        isOpen={isProvisioningOpen}
+        packages={state?.pending?.packages || []}
+        details={state?.pending?.details}
+        pythonImage={state?.pending?.python_image}
+        warnings={state?.pending?.warnings}
+        onApprove={handleApproveProvisioning}
+        onReject={handleRejectProvisioning}
+      />
 
       {/* Slide-over Evidence Drawer */}
       <EvidenceDrawer

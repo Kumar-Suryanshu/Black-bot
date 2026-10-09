@@ -41,9 +41,11 @@ from tools.preflight import preflight_check
 from tools.exec_tools import query_package_index
 from tools.report import generate_report
 from agent.critic.schemas import ReportReviewOutput
+from agent.critic.prompts import CRITIC_REPORT_REVIEW_PROMPT
 
 # Re-export FakeSandbox for backward compatibility with existing tests
 from sandbox.fake import FakeSandbox
+from tools import paths
 
 _OVERRIDE_SANDBOX = None
 
@@ -67,26 +69,181 @@ def set_sandbox(sb):
     _OVERRIDE_SANDBOX = sb
 
 def resolve_attempt_log(state: ProjectState, deps: dict, attempt_num: Optional[int] = None) -> Optional[Path]:
-    """Robustly resolves the path to an attempt's execution log file."""
+    """
+    Resolves the path to a specific attempt's execution log.
+
+    Attempt logs are named `<kind>_<n>.log`, so a failed dependency install writes
+    `setup_1.log` rather than `run_1.log`. Callers that hardcoded `run_{n}.log` therefore
+    missed exactly the attempts that had an install error worth reading.
+
+    The attempt's own recorded log_path wins, then a glob over any kind for that attempt
+    number. The "most recent log" fallbacks are consulted only when the caller is actually
+    asking for the latest attempt, so requesting attempt 1 can never return attempt 3's log.
+    """
     att = state.attempts[attempt_num - 1] if attempt_num and 0 < attempt_num <= len(state.attempts) else (state.attempts[-1] if state.attempts else None)
     n = att.n if att else (attempt_num or len(state.attempts) or 1)
-    
-    candidates = []
+    is_latest = (attempt_num is None) or (n == (state.attempts[-1].n if state.attempts else n))
+
+    log_dir = paths.logs_dir(state.project_id)
+    ws = deps.get("workspace", state.workspace or paths.workspace_path(state.project_id))
+
+    candidates: list = []
     if att and att.log_path:
         candidates.append(Path(att.log_path))
-    if getattr(state, "latest_log_path", None):
-        candidates.append(Path(state.latest_log_path))
-    if deps.get("latest_log_path"):
-        candidates.append(Path(deps["latest_log_path"]))
-    candidates.append(Path("data/runs") / state.project_id / "logs" / f"run_{n}.log")
-    
-    ws = deps.get("workspace", state.workspace or f"data/runs/{state.project_id}/workspace")
+
+    # Any kind recorded for this attempt number (run_, setup_, investigate_, ...)
+    for base in (log_dir, Path(ws) / "logs"):
+        try:
+            if base.is_dir():
+                candidates.extend(sorted(base.glob(f"*_{n}.log")))
+        except Exception:
+            pass
+
+    if is_latest:
+        if getattr(state, "latest_log_path", None):
+            candidates.append(Path(state.latest_log_path))
+        if deps.get("latest_log_path"):
+            candidates.append(Path(deps["latest_log_path"]))
+
+    candidates.append(log_dir / f"run_{n}.log")
     candidates.append(Path(ws) / "logs" / f"run_{n}.log")
-    
+
     for c in candidates:
         if c and str(c).strip() and c.is_file():
             return c
     return None
+
+# How many times the same refused action is tolerated before the orchestrator stops asking
+# and moves the run on. Without this, a Solver that keeps proposing a disallowed tool call
+# (e.g. "pip install PyYAML", which must go through a dependency patch) burns every remaining
+# diagnose step re-proposing it, because nothing told it the call was refused.
+MAX_IDENTICAL_REJECTIONS = 2
+
+def record_rejected_action(state: ProjectState, tool: str, detail: str, guidance: str) -> int:
+    """
+    Records a refused tool call and returns how many times this exact call has been refused.
+    The record is fed back to the Solver in the next diagnose payload.
+    """
+    signature = f"{tool}|{detail}"
+    for entry in state.rejected_actions:
+        if entry.get("signature") == signature:
+            entry["count"] = entry.get("count", 1) + 1
+            entry["guidance"] = guidance
+            return entry["count"]
+
+    state.rejected_actions.append({
+        "signature": signature,
+        "tool": tool,
+        "detail": detail,
+        "guidance": guidance,
+        "count": 1,
+    })
+    # Keep the feedback window small; only recent refusals are useful context.
+    if len(state.rejected_actions) > 10:
+        del state.rejected_actions[:-10]
+    return 1
+
+_EDITABLE_SUFFIXES = (".yaml", ".yml", ".json", ".toml", ".txt", ".py", ".cfg", ".ini")
+
+
+def _editable_file_paths(state: ProjectState, ws: str) -> list:
+    """Repository files a patch may target, as real paths relative to the root."""
+    paths = []
+    root = Path(ws)
+    for rel in (state.repo_profile or {}).get("tree", []):
+        if rel.endswith(_EDITABLE_SUFFIXES) and not rel.startswith((".git/", "outputs/")):
+            paths.append(rel)
+    if not paths and root.is_dir():
+        for f in root.rglob("*"):
+            if f.is_file() and f.suffix in _EDITABLE_SUFFIXES:
+                rel = str(f.relative_to(root)).replace("\\", "/")
+                if not rel.startswith((".git/", "outputs/", ".site/")):
+                    paths.append(rel)
+    return sorted(set(paths))[:60]
+
+
+def _editable_file_contents(state: ProjectState, ws: str, max_bytes: int = 4000) -> dict:
+    """
+    Contents of the files a fix is most likely to touch, so edit.old can be copied exactly
+    rather than guessed. replace_text demands an exact single match, which is impossible to
+    satisfy from memory.
+    """
+    root = Path(ws)
+    wanted = []
+    if state.plan and state.plan.config_file:
+        wanted.append(state.plan.config_file)
+    for name in ("requirements.txt", "pyproject.toml", "setup.cfg", "environment.yml"):
+        wanted.append(name)
+    hypo_text = state.hypotheses[-1].text if state.hypotheses else ""
+    for rel in _editable_file_paths(state, ws):
+        if rel in hypo_text or Path(rel).name in hypo_text:
+            wanted.append(rel)
+    for rel in _editable_file_paths(state, ws):
+        if rel.startswith(("config", "configs/")) and rel not in wanted:
+            wanted.append(rel)
+
+    out = {}
+    for rel in wanted:
+        if rel in out or len(out) >= 6:
+            continue
+        f = root / rel
+        try:
+            if f.is_file():
+                out[rel] = f.read_text(encoding="utf-8", errors="ignore")[:max_bytes]
+        except Exception:
+            continue
+    return out
+
+
+def _evidence_ledger_summary(state: ProjectState) -> list:
+    """The recorded evidence, so the Solver can cite ids that actually exist."""
+    try:
+        from backend.app.db import get_all_evidence
+        items = get_all_evidence("data/rerun.db", state.project_id)
+        if items:
+            return items[-12:]
+    except Exception:
+        pass
+    return [{"id": eid, "type": "unknown", "artifact_path": ""} for eid in state.evidence_ids[-12:]]
+
+
+def finding_signature(tool: str, args: dict) -> str:
+    """Identifies a diagnostic call, so the same question is not asked twice."""
+    try:
+        norm = json.dumps(args or {}, sort_keys=True, separators=(",", ":"))
+    except Exception:
+        norm = str(args)
+    return f"{tool}|{norm}"
+
+
+def record_finding(state: ProjectState, step: int, tool: str, args: dict, summary: str) -> None:
+    """
+    Records what a diagnostic call found.
+
+    Without this the Solver was amnesiac: diagnose_step received only a one-line state
+    summary and the tail of the run log, never the result of its own previous calls. On a
+    silent-divergence run it called compare_configuration eight times in a row, learned
+    nothing each time, exhausted the step budget and returned INCONCLUSIVE on a run that had
+    in fact executed perfectly.
+    """
+    state.diagnostic_findings.append({
+        "step": step,
+        "tool": tool,
+        "signature": finding_signature(tool, args),
+        "summary": summary[:600],
+    })
+    if len(state.diagnostic_findings) > 20:
+        del state.diagnostic_findings[:-20]
+
+
+def has_finding(state: ProjectState, tool: str, args: dict) -> Optional[dict]:
+    """The existing finding for this exact call, if it has already been answered."""
+    sig = finding_signature(tool, args)
+    for f in state.diagnostic_findings:
+        if f.get("signature") == sig:
+            return f
+    return None
+
 
 def guard_budgets(state: ProjectState) -> bool:
     if state.phase in ("STATUS", "REPORT", "REPORT_REVIEW", "DONE"):
@@ -119,7 +276,21 @@ def guard_budgets(state: ProjectState) -> bool:
 
 def handle_ingest(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
-    ws_path = state.workspace or deps.get("workspace", f"data/runs/{state.project_id}/workspace")
+
+    # Record whether this run is really containerised. state.simulated was declared and read
+    # by the report generator and the UI but never set, so the "SIMULATED RUN" banner was
+    # unreachable and a fake-sandbox run could emit a REPRODUCED verdict indistinguishable
+    # from a real one.
+    sandbox = deps.get("sandbox") or get_sandbox()
+    is_real_container = type(sandbox).__name__ == "DockerSandbox"
+    state.simulated = not is_real_container
+    if state.simulated:
+        emit_event(
+            state, "system", "simulated_run",
+            f"Run is SIMULATED: sandbox is {type(sandbox).__name__}, not a real container"
+        )
+
+    ws_path = state.workspace or deps.get("workspace", paths.workspace_path(state.project_id))
     state.workspace = ws_path
     deps["workspace"] = ws_path
     os.makedirs(ws_path, exist_ok=True)
@@ -163,7 +334,7 @@ def handle_ingest(state: ProjectState, deps: dict):
 
 def handle_analyze(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
-    ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
+    ws = deps.get("workspace", paths.workspace_path(state.project_id))
     state.repo_profile = inspect_repository(ws)
     
     paper_path = state.paper_path or deps.get("paper_path", "benchmarks/papers/digits_softmax.pdf")
@@ -176,7 +347,8 @@ def handle_analyze(state: ProjectState, deps: dict):
             "solver", "extract_claims",
             {"paper_text": prompt_paper_text},
             ExtractClaimsOutput,
-            benchmark_id=state.benchmark_id
+            benchmark_id=state.benchmark_id,
+            task_prompt=EXTRACT_CLAIMS_PROMPT
         )
         # Filter quotes against full paper text and extracted tables (R5)
         verified_claims = []
@@ -240,7 +412,8 @@ def handle_plan(state: ProjectState, deps: dict):
             "solver", "plan_experiment",
             {"claims": [c.model_dump() for c in state.claims], "repo_profile": state.repo_profile},
             PlanExperimentOutput,
-            benchmark_id=state.benchmark_id
+            benchmark_id=state.benchmark_id,
+            task_prompt=PLAN_EXPERIMENT_PROMPT
         )
         state.plan = Plan(
             command=plan_out.command,
@@ -275,17 +448,52 @@ def handle_plan(state: ProjectState, deps: dict):
 
 def handle_preflight(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
-    ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
-    res = preflight_check(ws, state.repo_profile, gpu_enabled=False, gpu_usable=False)
+    ws = deps.get("workspace", paths.workspace_path(state.project_id))
+    # Reflect the real host. These were hardcoded False, so a GPU repository was blocked even
+    # on a machine with a working GPU and GPU_ENABLED=true.
+    from sandbox.limits import get_limits
+    limits = get_limits()
+    gpu_enabled = limits.gpu_enabled
+    if gpu_enabled:
+        from sandbox.manager import probe_gpu
+        gpu_info = probe_gpu()
+    else:
+        gpu_info = {
+            "usable": False,
+            "reason": "GPU mode is disabled (set GPU_ENABLED=true to opt in)",
+        }
+
+    res = preflight_check(
+        ws, state.repo_profile,
+        gpu_enabled=gpu_enabled,
+        gpu_usable=bool(gpu_info.get("usable")),
+        gpu_detail=str(gpu_info.get("reason", "")),
+    )
     state.preflight = res
     if res["blockers"]:
-        # Record blocker evidence
+        if "gpu_required" in res["blockers"]:
+            emit_event(
+                state, "system", "gpu_unavailable",
+                f"Repository requires a GPU; sandbox cannot provide one: {res.get('gpu_detail', '')}"
+            )
         state.phase = "STATUS"
         return
 
     # Check safe dependency provisioning (Stage 6)
     from tools.provisioning import build_provisioning_plan, download_wheels_for_project
-    plan = build_provisioning_plan(ws, state.project_id)
+    # The entry script of the command actually being run, so provisioning is scoped to it.
+    entry_script = None
+    if state.plan and state.plan.command:
+        import shlex as _shlex
+        for token in _shlex.split(state.plan.command):
+            if token.endswith(".py"):
+                entry_script = token
+                break
+    plan = build_provisioning_plan(
+        ws, state.project_id,
+        triage_report=(state.repo_profile or {}).get("triage"),
+        entry_script=entry_script,
+    )
     if plan.get("status") == "NEEDS_BUILD":
         state.preflight["blockers"].append("NEEDS_BUILD")
         state.preflight["triage_verdict"] = "NEEDS_BUILD"
@@ -315,7 +523,7 @@ def handle_preflight(state: ProjectState, deps: dict):
         return
 
     if plan.get("needed") and state.provisioning_approved:
-        target_whl = Path(f"data/runs/{state.project_id}/wheelhouse")
+        target_whl = paths.wheelhouse_dir(state.project_id)
         res = download_wheels_for_project(
             state.project_id,
             [p["name"] for p in plan["packages"]],
@@ -331,7 +539,7 @@ def handle_preflight(state: ProjectState, deps: dict):
 
 def handle_setup(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
-    ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
+    ws = deps.get("workspace", paths.workspace_path(state.project_id))
     sb = deps.get("sandbox", get_sandbox())
     
     req_file = Path(ws) / "requirements.txt"
@@ -361,7 +569,7 @@ def handle_setup(state: ProjectState, deps: dict):
 
 def handle_run(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
-    ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
+    ws = deps.get("workspace", paths.workspace_path(state.project_id))
     sb = deps.get("sandbox", get_sandbox())
     
     n = len(state.attempts) + 1
@@ -406,7 +614,7 @@ def handle_run(state: ProjectState, deps: dict):
 def handle_observe(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
     latest = state.attempts[-1]
-    ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
+    ws = deps.get("workspace", paths.workspace_path(state.project_id))
     log_file = resolve_attempt_log(state, deps, latest.n)
     log_text = log_file.read_text(encoding="utf-8", errors="ignore") if log_file else ""
     
@@ -426,7 +634,7 @@ def handle_observe(state: ProjectState, deps: dict):
 
 def handle_validate(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
-    ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
+    ws = deps.get("workspace", paths.workspace_path(state.project_id))
     latest = state.attempts[-1]
 
     from tools.metrics import extract_metric, record_metric_evidence
@@ -443,8 +651,10 @@ def handle_validate(state: ProjectState, deps: dict):
             metrics_dict[c.id] = ext_res.value
             metrics_dict[c.metric] = ext_res.value
 
-            # Benchmark compatibility shim
-            if state.benchmark_id or c.metric == "test_accuracy":
+            # Benchmark compatibility key, written only for the claim that actually identifies
+            # it. Writing it for every claim meant the last claim in the loop overwrote the
+            # shared key, and COMPARE then read another claim's number through it.
+            if c.result_key == "test_accuracy_mean" or c.metric == "test_accuracy":
                 metrics_dict["test_accuracy_mean"] = ext_res.value
                 if ext_res.std is not None:
                     metrics_dict["test_accuracy_std"] = ext_res.std
@@ -481,11 +691,13 @@ def handle_compare(state: ProjectState, deps: dict):
     for c in state.claims:
         obs_val = None
         if latest.metrics:
+            # Only this claim's own keys. The previous unconditional fall-through to
+            # "test_accuracy_mean" could compare a claim against another metric's value.
             obs_val = latest.metrics.get(c.id)
             if obs_val is None:
                 obs_val = latest.metrics.get(c.metric)
-            if obs_val is None and "test_accuracy_mean" in latest.metrics:
-                obs_val = latest.metrics["test_accuracy_mean"]
+            if obs_val is None and c.result_key:
+                obs_val = latest.metrics.get(c.result_key)
 
         res = compare(c, obs_val)
         comparisons.append(res)
@@ -502,7 +714,7 @@ def handle_compare(state: ProjectState, deps: dict):
 
 def handle_diagnose(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
-    ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
+    ws = deps.get("workspace", paths.workspace_path(state.project_id))
     state.budgets["steps_used"] = state.budgets.get("steps_used", 0) + 1
     
     # Safety net nudge for silent divergence
@@ -523,6 +735,17 @@ def handle_diagnose(state: ProjectState, deps: dict):
         except Exception:
             pass
 
+    # Deterministic diagnosis first. For a module named in a traceback, or a config key that
+    # disagrees with a paper-stated value, the fix follows from the evidence and does not
+    # need judgement. Leaving it to the Solver made the outcome depend on which tool it
+    # happened to pick inside the step budget, so the same case passed on one run and
+    # exhausted its budget on the next.
+    #
+    # Nothing is bypassed: the proposal produced here cites real evidence ids and still goes
+    # through POLICY_CHECK, the Critic and human approval.
+    if attempt_deterministic_patch(state, deps, ws, step_num):
+        return
+
     # Mode diagnose_step
     try:
         diag_out = llm_call(
@@ -530,6 +753,35 @@ def handle_diagnose(state: ProjectState, deps: dict):
             {
                 "state_summary": f"Step {step_num}, silent_divergence={silent_div}",
                 "observation": obs_text,
+                # Refused calls from earlier steps. Without this the Solver has no way to know
+                # a call was rejected and simply proposes it again.
+                # What previous diagnostic calls actually found. The Solver repeated the
+                # same tool call indefinitely when this was missing.
+                # The evidence ledger. Without this the Solver cannot cite a real id, so no
+                # hypothesis could ever be confirmed and no patch could ever be proposed.
+                "evidence_ledger": [
+                    {"id": e["id"], "type": e.get("type"), "from": e.get("artifact_path", "").split("/")[-1]}
+                    for e in _evidence_ledger_summary(state)
+                ],
+                "how_to_cite_evidence": (
+                    "hypotheses[].evidence and propose_patch.evidence must contain ids from "
+                    "evidence_ledger above, such as 'E-001'. Never put a tool name, a file "
+                    "name or a sentence there. If the ledger is empty, call inspect_file, "
+                    "read_logs, inspect_error or compare_configuration first to create one."
+                ),
+                "findings_so_far": [
+                    {"step": f["step"], "tool": f["tool"], "found": f["summary"]}
+                    for f in state.diagnostic_findings[-8:]
+                ],
+                "refused_actions": [
+                    {
+                        "tool": r.get("tool"),
+                        "why_refused": r.get("detail"),
+                        "do_this_instead": r.get("guidance"),
+                        "times_refused": r.get("count", 1),
+                    }
+                    for r in state.rejected_actions[-5:]
+                ],
                 "allowed_tools": [
                     {"name": "inspect_file"},
                     {"name": "search_repository"},
@@ -544,43 +796,157 @@ def handle_diagnose(state: ProjectState, deps: dict):
                 ]
             },
             DiagnoseStepOutput,
-            benchmark_id=state.benchmark_id
+            benchmark_id=state.benchmark_id,
+            task_prompt=DIAGNOSE_STEP_PROMPT
         )
         
-        # §7.3: Updates hypotheses only if every evidence ID exists in the ledger
-        all_eids_valid = True
+        # §7.3: a hypothesis may only be "confirmed" on evidence that exists in the ledger.
+        #
+        # This used to discard the ENTIRE hypothesis update whenever any cited id was
+        # unknown. In practice the Solver cites a tool name or a sentence rather than an
+        # id ("compare_configuration", "Config mismatches vs the paper: ..."), because
+        # nothing in its input ever told it which ids exist. Every update was therefore
+        # thrown away, state.hypotheses stayed empty, propose_patch was refused for want of
+        # a confirmed hypothesis, and no run could ever produce a patch. That is why cases
+        # whose cause was already identified still ended INCONCLUSIVE.
+        #
+        # The invariant is kept exactly: a patch still requires a confirmed hypothesis
+        # citing at least one real evidence id. What changes is that invalid ids are
+        # dropped rather than discarding the reasoning, an over-claimed hypothesis is
+        # downgraded to "open" instead of vanishing, and the Solver is told what to cite.
+        cleaned_hypotheses = []
         for h in diag_out.hypotheses:
-            for eid in h.evidence:
-                if eid not in state.evidence_ids:
-                    all_eids_valid = False
-                    emit_event(state, "solver", "warning", f"Hypothesis {h.id} cited unrecorded evidence {eid}; rejected update")
-                    break
-            if not all_eids_valid:
-                break
-        if all_eids_valid:
-            state.hypotheses = diag_out.hypotheses
+            valid = [eid for eid in h.evidence if eid in state.evidence_ids]
+            invalid = [eid for eid in h.evidence if eid not in state.evidence_ids]
+            h.evidence = valid
+            if invalid:
+                emit_event(
+                    state, "solver", "warning",
+                    f"Hypothesis {h.id} cited {invalid[:3]} which are not evidence ids; dropped. "
+                    f"Recorded evidence ids are {state.evidence_ids or ['(none yet)']}",
+                )
+            if h.status == "confirmed" and not valid:
+                h.status = "open"
+                record_rejected_action(
+                    state, "confirm_hypothesis",
+                    f"Hypothesis {h.id} claimed 'confirmed' with no recorded evidence id",
+                    "Cite an id from the evidence ledger, e.g. E-001. Create one first with "
+                    "inspect_file, read_logs, inspect_error or compare_configuration, then "
+                    "cite the id it returns.",
+                )
+            cleaned_hypotheses.append(h)
+        if cleaned_hypotheses:
+            state.hypotheses = cleaned_hypotheses
 
         action_tool = diag_out.next_action.tool
         action_args = diag_out.next_action.args or {}
+
+        # Refuse to answer the same question twice. Repeating a call cannot produce new
+        # information, and burning the step budget on it is how a diagnosable run ended as
+        # INCONCLUSIVE.
+        if action_tool not in ("propose_patch", "conclude_no_cause"):
+            prior = has_finding(state, action_tool, action_args)
+            if prior is not None:
+                count = record_rejected_action(
+                    state, action_tool,
+                    f"{action_tool} was already run at step {prior['step']}",
+                    f"You already have this result: {prior['summary']}. "
+                    "Use it, choose a different tool, or propose a patch.",
+                )
+                emit_event(
+                    state, "solver", "warning",
+                    f"{action_tool} repeated (refused {count}x); its result is already known",
+                )
+                if count >= MAX_IDENTICAL_REJECTIONS:
+                    has_confirmed = any(
+                        h.status == "confirmed" and len(h.evidence) >= 1 for h in state.hypotheses
+                    )
+                    emit_event(
+                        state, "system", "action_refused_repeatedly",
+                        "Same diagnostic repeated with no new information; moving on",
+                    )
+                    state.phase = "PATCH_PROPOSE" if has_confirmed else "STATUS"
+                    return
+                if step_num >= DIAGNOSE_STEPS_MAX:
+                    state.phase = "STATUS"
+                return
 
         if action_tool == "propose_patch":
             has_confirmed = any(h.status == "confirmed" and len(h.evidence) >= 1 for h in state.hypotheses)
             if has_confirmed:
                 state.phase = "PATCH_PROPOSE"
             else:
-                emit_event(state, "solver", "error", "propose_patch rejected: no confirmed hypothesis with >= 1 evidence ID")
+                guidance = (
+                    "Before proposing a patch, confirm a hypothesis: set its status to "
+                    "'confirmed' and cite at least one evidence ID that already exists in the "
+                    "ledger. Use inspect_file, read_logs or inspect_error to obtain one."
+                )
+                count = record_rejected_action(
+                    state, "propose_patch",
+                    "propose_patch rejected: no confirmed hypothesis with >= 1 evidence ID",
+                    guidance
+                )
+                emit_event(
+                    state, "solver", "error",
+                    f"propose_patch rejected: no confirmed hypothesis with >= 1 evidence ID "
+                    f"(refused {count}x). {guidance}"
+                )
+                if count >= MAX_IDENTICAL_REJECTIONS:
+                    emit_event(
+                        state, "system", "action_refused_repeatedly",
+                        f"Refused propose_patch {count} times without a confirmed hypothesis; concluding"
+                    )
+                    state.phase = "STATUS"
+                    return
                 if step_num >= DIAGNOSE_STEPS_MAX:
                     state.phase = "STATUS"
         elif action_tool == "conclude_no_cause":
             state.phase = "STATUS"
         elif action_tool == "compare_configuration":
             state.config_diff = audit_config(ws, state.plan, state.paper_settings)
-            emit_event(state, "tool", "tool_finished", "Executed compare_configuration")
+            mismatches = [d for d in state.config_diff if d.get("status") == "mismatch"]
+            if mismatches:
+                summary = "Config mismatches vs the paper: " + "; ".join(
+                    f"{d['key']}: paper={d['paper_value']} effective={d['effective_value']}"
+                    for d in mismatches[:5]
+                )
+            elif state.config_diff:
+                summary = (
+                    f"All {len(state.config_diff)} paper-stated settings match the effective "
+                    "configuration. The divergence is not explained by configuration."
+                )
+            else:
+                summary = "No paper-stated settings were available to compare."
+            # Write the audit to disk and record it as evidence. compare_configuration is
+            # the decisive diagnostic for a silent divergence, yet it produced nothing
+            # citable, so a config-mismatch hypothesis had no valid evidence id to cite and
+            # could never be confirmed.
+            ev_ids = []
+            try:
+                audit_dir = paths.run_dir(state.project_id)
+                audit_dir.mkdir(parents=True, exist_ok=True)
+                audit_path = audit_dir / f"config_audit_step{step_num}.json"
+                audit_path.write_text(json.dumps(state.config_diff, indent=2), encoding="utf-8")
+                ev = record_evidence(
+                    state, "config", str(audit_path), None, None,
+                    "compare_configuration", f"diag_step_{step_num}",
+                )
+                ev_ids = [ev.id]
+                summary = f"{summary} (recorded as evidence {ev.id})"
+            except Exception as e:
+                emit_event(state, "system", "warning", f"Could not record config audit evidence: {e}")
+
+            record_finding(state, step_num, action_tool, action_args, summary)
+            emit_event(state, "tool", "tool_finished", summary, evidence_ids=ev_ids)
         elif action_tool == "read_logs":
             found = resolve_attempt_log(state, deps, len(state.attempts))
             if found:
                 ev = record_evidence(state, "log", str(found), action_args.get("line_start"), action_args.get("line_end"), "read_logs", f"diag_step_{step_num}")
-                emit_event(state, "tool", "evidence_recorded", "Read logs", evidence_ids=[ev.id])
+                record_finding(
+                    state, step_num, action_tool, action_args,
+                    f"Read {found.name} as evidence {ev.id}. Excerpt: {ev.excerpt[:200]}",
+                )
+                emit_event(state, "tool", "evidence_recorded", f"Read logs ({found.name})", evidence_ids=[ev.id])
             else:
                 emit_event(state, "solver", "error", "No log file found")
             if step_num >= DIAGNOSE_STEPS_MAX:
@@ -589,7 +955,11 @@ def handle_diagnose(state: ProjectState, deps: dict):
             found = resolve_attempt_log(state, deps, len(state.attempts))
             if found:
                 ev = record_evidence(state, "log", str(found), None, None, "inspect_error", f"diag_step_{step_num}")
-                emit_event(state, "tool", "evidence_recorded", "Inspected error in logs", evidence_ids=[ev.id])
+                record_finding(
+                    state, step_num, action_tool, action_args,
+                    f"Inspected {found.name} as evidence {ev.id}. Excerpt: {ev.excerpt[:200]}",
+                )
+                emit_event(state, "tool", "evidence_recorded", f"Inspected error in {found.name}", evidence_ids=[ev.id])
             else:
                 emit_event(state, "solver", "error", "No log file found")
             if step_num >= DIAGNOSE_STEPS_MAX:
@@ -610,7 +980,34 @@ def handle_diagnose(state: ProjectState, deps: dict):
                     else:
                         emit_event(state, "tool", "tool_finished", f"Ran {cmd} but no log produced")
                 else:
-                    emit_event(state, "solver", "error", f"Command not allowed: {cmd}")
+                    if cmd_trim.startswith(("pip install", "pip3 install", "python -m pip install")):
+                        guidance = (
+                            "The sandbox runs offline and read-only, so packages cannot be "
+                            "installed ad hoc. Propose a patch of type 'dependency' that edits "
+                            "requirements.txt with an exact '==' pin instead; the orchestrator "
+                            "reinstalls from the offline wheelhouse after the patch is approved."
+                        )
+                    else:
+                        guidance = (
+                            "Only read-only inspection commands are permitted: pip list, "
+                            "pip show, python -c, ls, cat. Use inspect_file, read_logs or "
+                            "search_repository to gather evidence."
+                        )
+                    count = record_rejected_action(state, "run_command", f"Command not allowed: {cmd}", guidance)
+                    emit_event(
+                        state, "solver", "error",
+                        f"Command not allowed: {cmd} (refused {count}x). {guidance}"
+                    )
+                    if count >= MAX_IDENTICAL_REJECTIONS:
+                        emit_event(
+                            state, "system", "action_refused_repeatedly",
+                            f"Refused the same command {count} times; moving on instead of re-asking"
+                        )
+                        has_confirmed = any(
+                            h.status == "confirmed" and len(h.evidence) >= 1 for h in state.hypotheses
+                        )
+                        state.phase = "PATCH_PROPOSE" if has_confirmed else "STATUS"
+                        return
             if step_num >= DIAGNOSE_STEPS_MAX:
                 state.phase = "STATUS"
         elif action_tool == "inspect_file":
@@ -627,6 +1024,10 @@ def handle_diagnose(state: ProjectState, deps: dict):
                             "inspect_file",
                             f"diag_step_{step_num}"
                         )
+                        record_finding(
+                            state, step_num, action_tool, action_args,
+                            f"Inspected {fpath} as evidence {ev.id}. Excerpt: {ev.excerpt[:200]}",
+                        )
                         emit_event(state, "tool", "evidence_recorded", f"Inspected {fpath}", evidence_ids=[ev.id])
             if step_num >= DIAGNOSE_STEPS_MAX:
                 state.phase = "STATUS"
@@ -642,41 +1043,198 @@ def handle_diagnose(state: ProjectState, deps: dict):
                                 matches.append(str(f.relative_to(ws)))
                         except Exception:
                             pass
-            emit_event(state, "tool", "tool_finished", f"search_repository found {len(matches)} matches")
+            summary = (
+                f"search_repository for {q!r} found {len(matches)} file(s): {matches[:5]}"
+                if q else "search_repository called without a query"
+            )
+            record_finding(state, step_num, action_tool, action_args, summary)
+            emit_event(state, "tool", "tool_finished", summary)
             if step_num >= DIAGNOSE_STEPS_MAX:
                 state.phase = "STATUS"
         elif action_tool == "inspect_repository":
             state.repo_profile = inspect_repository(ws)
-            emit_event(state, "tool", "tool_finished", "inspect_repository executed")
+            tri = state.repo_profile.get("triage", {})
+            summary = (
+                f"Repository profile: verdict={tri.get('verdict')}, "
+                f"entry points={state.repo_profile.get('entry_points', [])[:4]}, "
+                f"unresolved imports={(tri.get('imports') or {}).get('unresolved', [])[:5]}"
+            )
+            record_finding(state, step_num, action_tool, action_args, summary)
+            emit_event(state, "tool", "tool_finished", summary)
             if step_num >= DIAGNOSE_STEPS_MAX:
                 state.phase = "STATUS"
         elif action_tool == "query_package_index":
             pkg = action_args.get("package") or action_args.get("name") or ""
             vers = query_package_index(pkg) if pkg else []
-            emit_event(state, "tool", "tool_finished", f"query_package_index found {vers}")
+            summary = f"query_package_index({pkg!r}) -> versions available offline: {vers}"
+            record_finding(state, step_num, action_tool, action_args, summary)
+            emit_event(state, "tool", "tool_finished", summary)
             if step_num >= DIAGNOSE_STEPS_MAX:
                 state.phase = "STATUS"
         else:
+            # An unrecognised tool used to be dropped in silence: no event, no feedback, a
+            # step consumed. A run could spend its whole diagnose budget here and finish
+            # INCONCLUSIVE with an empty trace, which is exactly what b3 did.
+            allowed = [
+                "inspect_file", "search_repository", "inspect_repository", "read_logs",
+                "inspect_error", "query_package_index", "compare_configuration",
+                "run_command", "propose_patch", "conclude_no_cause",
+            ]
+            count = record_rejected_action(
+                state, "unknown_tool", f"{action_tool!r} is not a tool",
+                f"Choose exactly one of: {', '.join(allowed)}.",
+            )
+            emit_event(
+                state, "solver", "error",
+                f"Unknown tool {action_tool!r} requested (refused {count}x). Allowed: {', '.join(allowed)}",
+            )
+            if count >= MAX_IDENTICAL_REJECTIONS:
+                has_confirmed = any(
+                    h.status == "confirmed" and len(h.evidence) >= 1 for h in state.hypotheses
+                )
+                emit_event(
+                    state, "system", "action_refused_repeatedly",
+                    "Solver kept requesting an unknown tool; moving on",
+                )
+                state.phase = "PATCH_PROPOSE" if has_confirmed else "STATUS"
+                return
             if step_num >= DIAGNOSE_STEPS_MAX:
                 state.phase = "STATUS"
     except Exception as e:
         emit_event(state, "solver", "error", f"Diagnose failed: {str(e)}")
         state.phase = "STATUS"
 
+def attempt_deterministic_patch(state: ProjectState, deps: dict, ws: str, step_num: int) -> bool:
+    """
+    Build and stage the mechanical fix for this failure, if there is one.
+
+    Returns True when a proposal was staged and the phase advanced to POLICY_CHECK.
+    """
+    from tools.diagnosis import derive_patch
+
+    latest = state.attempts[-1] if state.attempts else None
+    log_file = resolve_attempt_log(state, deps, latest.n if latest else None)
+    log_text = ""
+    if log_file:
+        try:
+            log_text = log_file.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            log_text = ""
+
+    # A config mismatch can only be diagnosed once the audit has run.
+    if not state.config_diff and latest is not None and latest.exit_code == 0:
+        state.config_diff = audit_config(ws, state.plan, state.paper_settings)
+
+    derived = derive_patch(state, ws, log_text)
+    if not derived:
+        return False
+
+    edits = derived["edits"]
+    signature = compute_fix_signature(edits[0].file, edits[0].op, edits[0].new)
+    if signature in state.failed_fixes:
+        return False  # already tried and rejected; let the Solver try something else
+
+    # Record the evidence this diagnosis rests on, so the hypothesis cites a real id.
+    evidence_ids = []
+    try:
+        if derived["type"] == "dependency" and log_file:
+            ev = record_evidence(
+                state, "log", str(log_file), None, None,
+                "deterministic_diagnosis", f"diag_step_{step_num}",
+            )
+            evidence_ids = [ev.id]
+        elif derived["type"] == "config_value":
+            # Cite the configuration file itself. The offending value appears there
+            # literally, so a reviewer can check the quote against it; the audit is a
+            # derived summary and makes a weaker citation.
+            target = Path(ws) / edits[0].file
+            if target.is_file():
+                ev = record_evidence(
+                    state, "config", str(target), None, None,
+                    "deterministic_diagnosis", f"diag_step_{step_num}",
+                )
+                evidence_ids = [ev.id]
+    except Exception as e:
+        emit_event(state, "system", "warning", f"Could not record diagnosis evidence: {e}")
+        return False
+
+    if not evidence_ids:
+        return False
+
+    hypothesis = derived["hypothesis"]
+    hypothesis.evidence = evidence_ids
+    state.hypotheses.append(hypothesis)
+
+    try:
+        new_texts = apply_edits_in_memory(ws, edits)
+        diff_str = make_diff(ws, new_texts)
+    except Exception as e:
+        emit_event(state, "system", "warning", f"Deterministic patch did not apply cleanly: {e}")
+        return False
+
+    proposal = PatchProposal(
+        id=f"P-{len(state.patches) + 1}",
+        hypothesis_id=hypothesis.id,
+        type=derived["type"],
+        rationale=derived["rationale"],
+        evidence=evidence_ids,
+        alternatives_considered=[],
+        edits=edits,
+        diff=diff_str,
+        fix_signature=signature,
+    )
+    state.patches.append(proposal)
+    state.budgets["steps_used"] = state.budgets.get("steps_used", 0) + 1
+    emit_event(
+        state, "system", "deterministic_diagnosis",
+        f"Derived {proposal.id} ({derived['type']}) from evidence {evidence_ids}: {derived['rationale'][:150]}",
+        evidence_ids=evidence_ids,
+    )
+    state.phase = "POLICY_CHECK"
+    return True
+
+
 def handle_patch_propose(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
-    ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
-    
+    ws = deps.get("workspace", paths.workspace_path(state.project_id))
+
+    # Charge a step for every proposal. Defence in depth: even if the revision round counter
+    # were ever wrong again, guard_budgets still bounds the propose/policy/review cycle.
+    state.budgets["steps_used"] = state.budgets.get("steps_used", 0) + 1
+
     try:
         patch_out = llm_call(
             "solver", "propose_patch",
             {
                 "hypothesis": state.hypotheses[-1].model_dump() if state.hypotheses else {},
                 "paper_settings": [ps.model_dump() for ps in state.paper_settings],
-                "failed_fixes": state.failed_fixes
+                "failed_fixes": state.failed_fixes,
+                # Ground truth about the repository. Without it the Solver guessed the path
+                # ("config.yaml" when the file is "configs/default.yaml") and guessed the
+                # line to replace, so replace_text matched nothing and the identical broken
+                # patch was proposed over and over.
+                "plan": {
+                    "command": state.plan.command if state.plan else None,
+                    "config_file": state.plan.config_file if state.plan else None,
+                    "output_file": state.plan.output_file if state.plan else None,
+                },
+                "editable_files": _editable_file_paths(state, ws),
+                "file_contents": _editable_file_contents(state, ws),
+                "how_to_write_edits": (
+                    "Every edit.file must be one of editable_files, written exactly as listed "
+                    "and relative to the repository root. For replace_text, edit.old must be "
+                    "copied character for character from file_contents and must occur exactly "
+                    "once. Cite evidence ids from the ledger, never tool names or prose."
+                ),
+                "previous_failures": [
+                    {"why": r["detail"], "do_this_instead": r["guidance"], "times": r["count"]}
+                    for r in state.rejected_actions[-5:]
+                    if r.get("tool") in ("propose_patch", "patch_edit")
+                ],
             },
             ProposePatchOutput,
-            benchmark_id=state.benchmark_id
+            benchmark_id=state.benchmark_id,
+            task_prompt=PROPOSE_PATCH_PROMPT
         )
         
         if not patch_out.edits:
@@ -711,9 +1269,16 @@ def handle_patch_propose(state: ProjectState, deps: dict):
         state.patches.append(proposal)
         state.phase = "POLICY_CHECK"
     except Exception as e:
-        emit_event(state, "solver", "error", f"Patch proposal failed: {str(e)}")
+        # Record WHY so the next attempt sees it. Previously the same unusable patch was
+        # proposed repeatedly because the failure never reached the Solver.
+        count = record_rejected_action(
+            state, "patch_edit", f"Patch proposal failed: {str(e)}",
+            "Re-read file_contents and copy edit.old exactly from it, or use append_line. "
+            "edit.file must be one of editable_files.",
+        )
+        emit_event(state, "solver", "error", f"Patch proposal failed ({count}x): {str(e)}")
         regen_count = state.budgets.get("patch_regenerations", 0)
-        if regen_count < 2:
+        if regen_count < 2 and count < MAX_IDENTICAL_REJECTIONS + 1:
             state.budgets["patch_regenerations"] = regen_count + 1
             state.phase = "PATCH_PROPOSE"
         else:
@@ -723,7 +1288,7 @@ def handle_patch_propose(state: ProjectState, deps: dict):
 def handle_policy_check(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
     patch = state.patches[-1]
-    ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
+    ws = deps.get("workspace", paths.workspace_path(state.project_id))
     
     pol_res = check_policy(state, patch, ws)
     patch.policy_result = pol_res
@@ -749,27 +1314,62 @@ def handle_policy_check(state: ProjectState, deps: dict):
 def handle_critic_review(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
     patch = state.patches[-1]
-    round_num = len([r for r in state.critic_reviews if r.patch_id == patch.id]) + 1
-    
+
+    # Revision rounds are counted per revision *lineage*, not per patch id. A REVISE sends the
+    # run back to PATCH_PROPOSE, which appends a brand-new patch; counting reviews by patch id
+    # therefore reset the round to 1 forever and the critic could never exhaust its rounds.
+    round_num = state.budgets.get("critic_revision_round", 0) + 1
+
     review = review_patch(state, patch, round_num=round_num)
     state.critic_reviews.append(review)
     patch.critic_status = review.verdict.lower()
-    
+
     decision = decide_patch(patch.policy_result, review, round_num, CRITIC_ROUNDS_MAX)
-    
+
     if decision.action == "DROP":
         patch.status = "dropped"
         state.failed_fixes.append(patch.fix_signature)
+        state.budgets["critic_revision_round"] = 0
         state.phase = "DIAGNOSE"
     elif decision.action == "REVISE":
+        # The next PATCH_PROPOSE supersedes this patch, so retire it rather than leaving a
+        # growing list of patches that are all still "proposed".
+        patch.status = "dropped"
+        state.budgets["critic_revision_round"] = round_num
+        emit_event(
+            state, "arbiter", "patch_revision_requested",
+            f"Critic requested revision of {patch.id} (round {round_num}/{CRITIC_ROUNDS_MAX})"
+        )
         state.phase = "PATCH_PROPOSE"
     elif decision.action == "TO_HUMAN":
         app_id = f"A-{len(state.approvals) + 1}"
         state.pending = {"kind": "approval", "id": app_id, "patch_id": patch.id, "banner": decision.banner}
+        state.budgets["critic_revision_round"] = 0
         state.phase = "APPROVAL"
 
 def handle_approval(state: ProjectState, deps: dict):
-    patch = state.patches[-1]
+    # Resolve the patch the human was actually asked about, not merely the most recent one.
+    # `state.pending` is authoritative when present. Some callers (the headless runner, and
+    # the edit path in the API) clear `pending` as they record the decision, so fall back to
+    # the most recent patch still awaiting one rather than stalling.
+    pending_patch_id = (state.pending or {}).get("patch_id")
+    patch = None
+    if pending_patch_id:
+        patch = next((p for p in state.patches if p.id == pending_patch_id), None)
+    if patch is None:
+        patch = next(
+            (p for p in reversed(state.patches) if p.status in ("proposed", "approved")),
+            None
+        )
+    if patch is None:
+        emit_event(
+            state, "system", "error",
+            f"APPROVAL phase has no patch awaiting a decision (pending patch_id {pending_patch_id!r})"
+        )
+        state.pending = None
+        state.phase = "DIAGNOSE"
+        return
+
     # Check if approved
     matching_app = next((a for a in state.approvals if a.patch_id == patch.id), None)
     if not matching_app:
@@ -787,7 +1387,7 @@ def handle_approval(state: ProjectState, deps: dict):
 def handle_patch_apply(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
     patch = state.patches[-1]
-    ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
+    ws = deps.get("workspace", paths.workspace_path(state.project_id))
     sb = deps.get("sandbox", get_sandbox())
     
     success = apply_patch(state, patch, ws)
@@ -840,6 +1440,33 @@ def handle_status(state: ProjectState, deps: dict):
 
 def handle_report(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
+
+    # The report is produced in two stages. The deterministic report needs no model at all, so
+    # build and persist it FIRST: previously the whole report was gated behind the optional
+    # write_report call, and a rate-limited provider (429 backoff, retries, then fallback)
+    # could leave the operator staring at an empty console for minutes with nothing saved.
+    base_report = generate_report(state)
+    if state.final is None:
+        state.final = {}
+    state.final["report"] = base_report
+    deps["report"] = base_report
+
+    try:
+        from backend.app.db import save_project_state
+        save_project_state(
+            "data/rerun.db", state.project_id, state.benchmark_id, state.repo_commit,
+            state.final.get("status", state.phase), state
+        )
+    except Exception:
+        pass
+
+    emit_event(
+        state, "system", "report_available",
+        "Deterministic report generated and saved; statement enrichment is optional"
+    )
+
+    # Optional enrichment. Capped retries so an unavailable provider cannot stall the run;
+    # the report above already stands on its own if this fails.
     raw_statements = []
     try:
         rep_out = llm_call(
@@ -851,7 +1478,9 @@ def handle_report(state: ProjectState, deps: dict):
                 "unresolved_issues": state.unresolved_issues
             },
             WriteReportOutput,
-            benchmark_id=state.benchmark_id
+            benchmark_id=state.benchmark_id,
+            max_retries=1,
+            task_prompt=WRITE_REPORT_PROMPT
         )
         if rep_out and hasattr(rep_out, "statements"):
             raw_statements = rep_out.statements
@@ -859,12 +1488,12 @@ def handle_report(state: ProjectState, deps: dict):
     except Exception as e:
         emit_event(state, "solver", "warning", f"Write report skipped or failed: {str(e)}")
 
-    # Deterministic report generation & verification
-    report_data = generate_report(state, raw_statements=raw_statements)
-    if state.final is None:
-        state.final = {}
-    state.final["report"] = report_data
-    deps["report"] = report_data
+    report_data = base_report
+    if raw_statements:
+        report_data = generate_report(state, raw_statements=raw_statements)
+        state.final["report"] = report_data
+        deps["report"] = report_data
+
     emit_event(
         state, "solver", "report_ready",
         f"Generated report: {report_data['verification_summary']['summary_text']}",
@@ -883,7 +1512,8 @@ def handle_report_review(state: ProjectState, deps: dict):
                 "critic", "report_review",
                 {"statements": raw_stmts},
                 ReportReviewOutput,
-                benchmark_id=state.benchmark_id
+                benchmark_id=state.benchmark_id,
+                task_prompt=CRITIC_REPORT_REVIEW_PROMPT
             )
             if rev_out and hasattr(rev_out, "flags") and state.final and "report" in state.final:
                 state.final["report"]["critic_flags"] = [f.model_dump() for f in rev_out.flags]
@@ -929,7 +1559,7 @@ def run_project(state: ProjectState, deps: Optional[dict] = None):
     if state.workspace:
         deps_dict.setdefault("workspace", state.workspace)
     else:
-        state.workspace = deps_dict.get("workspace", f"data/runs/{state.project_id}/workspace")
+        state.workspace = deps_dict.get("workspace", paths.workspace_path(state.project_id))
         deps_dict["workspace"] = state.workspace
         
     if state.latest_log_path and "latest_log_path" not in deps_dict:

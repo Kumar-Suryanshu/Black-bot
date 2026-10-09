@@ -18,13 +18,14 @@ from backend.app.models import (
 from backend.app.db import get_connection, get_project_state, save_project_state
 import backend.app.runner as runner
 
-def start_project_worker(project_id: str) -> bool:
-    return runner.start_project_worker(project_id)
+def start_project_worker(project_id: str, allow_resume: bool = False) -> bool:
+    return runner.start_project_worker(project_id, allow_resume=allow_resume)
 
 def stop_project_worker(project_id: str):
     return runner.stop_project_worker(project_id)
 from backend.app.sse import stream_manager
 from agent.state import ProjectState, Approval
+from tools import paths
 
 router = APIRouter()
 
@@ -177,7 +178,7 @@ async def create_project(request: Request):
         project_id = f"proj_{uuid.uuid4().hex[:8]}"
         
         # Save paper
-        project_run_dir = Path("data/runs") / project_id
+        project_run_dir = paths.run_dir(project_id)
         project_run_dir.mkdir(parents=True, exist_ok=True)
         saved_paper_path = str(project_run_dir / "paper.pdf")
         Path(saved_paper_path).write_bytes(paper_bytes)
@@ -253,7 +254,17 @@ def get_project(id: str):
         "attempts": [a.model_dump() for a in state.attempts],
         "patches": [p.model_dump() for p in state.patches],
         "provisioning_plan": state.provisioning_plan,
-        "status": state.final.get("status") if state.final else state.phase
+        "status": state.final.get("status") if state.final else state.phase,
+        # Lets the console offer the report as soon as one exists, rather than waiting for the
+        # phase to reach DONE behind an optional LLM enrichment call.
+        "report_available": bool(state.final and state.final.get("report")),
+        "final": state.final.get("status") and {
+            "status": state.final.get("status"),
+            "reason": state.final.get("reason", ""),
+            "after_n_fixes": state.final.get("after_n_fixes", 0),
+        } if state.final else None,
+        "unresolved_issues": state.unresolved_issues,
+        "preflight": state.preflight
     }
 
 @router.get("/api/projects/{id}/claims-draft")
@@ -261,10 +272,30 @@ def get_claims_draft(id: str):
     state = get_project_state("data/rerun.db", id)
     if not state:
         raise HTTPException(status_code=404, detail="Project not found")
+    # Runnable command candidates, so the console never has to invent one. The plan is only
+    # produced AFTER claims are confirmed, so at this gate there is usually no planned command
+    # at all; README-documented commands and discovered entry points are real alternatives.
+    profile = state.repo_profile or {}
+    candidates: List[str] = []
+    for cmd in profile.get("readme_commands", []) or []:
+        if cmd not in candidates:
+            candidates.append(cmd)
+    for entry in profile.get("entry_points", []) or []:
+        cmd = f"python {entry}"
+        if cmd not in candidates:
+            candidates.append(cmd)
+
     return {
         "claims": [c.model_dump() for c in state.claims],
         "paper_settings": [ps.model_dump() for ps in state.paper_settings],
-        "command": state.user_command or (state.plan.command if state.plan else None)
+        "command": state.user_command or (state.plan.command if state.plan else None),
+        "command_candidates": candidates[:12],
+        # Why claim extraction produced nothing, so the console can say so instead of
+        # substituting a placeholder claim with an invented number.
+        "extraction_issues": [
+            issue for issue in state.unresolved_issues
+            if "quote not found" in issue.lower() or "claim" in issue.lower()
+        ],
     }
 
 @router.post("/api/projects/{id}/claims/confirm")
@@ -281,7 +312,7 @@ def confirm_claims(id: str, req: ClaimsConfirmRequest):
     state.allow_high_risk = req.allow_high_risk
     if req.command:
         from tools.commands import validate_command
-        val_cmd = validate_command(req.command, workspace=state.workspace or f"data/runs/{id}/workspace")
+        val_cmd = validate_command(req.command, workspace=state.workspace or paths.workspace_path(id))
         if not val_cmd["valid"]:
             raise HTTPException(status_code=400, detail=val_cmd["reason"])
         state.user_command = req.command
@@ -293,8 +324,9 @@ def confirm_claims(id: str, req: ClaimsConfirmRequest):
     
     save_project_state("data/rerun.db", id, state.benchmark_id, state.repo_commit, state.phase, state)
     
-    # Resume orchestrator
-    start_project_worker(id)
+    # Resume orchestrator. This continues an existing project, so it is not subject to the
+    # cap on how many new reproductions may run at once.
+    start_project_worker(id, allow_resume=True)
     return {"status": "confirmed"}
 
 @router.post("/api/projects/{id}/claims/reject")
@@ -338,7 +370,7 @@ def approve_provisioning(id: str, req: ProvisioningApproveRequest):
         packages_to_download = [p["name"] for p in plan.get("packages", [])]
 
     python_image = plan.get("python_image", "rerun-base:py311")
-    target_whl = Path(f"data/runs/{id}/wheelhouse")
+    target_whl = paths.wheelhouse_dir(id)
 
     res = download_wheels_for_project(id, packages_to_download, target_whl, python_image=python_image)
 
@@ -354,7 +386,7 @@ def approve_provisioning(id: str, req: ProvisioningApproveRequest):
     emit_event(state, "system", "provisioning_approved", f"Approved provisioning for {len(packages_to_download)} packages")
     save_project_state("data/rerun.db", id, state.benchmark_id, state.repo_commit, state.phase, state)
 
-    start_project_worker(id)
+    start_project_worker(id, allow_resume=True)
     return {
         "status": "approved",
         "downloaded_count": res.get("downloaded_count", 0),
@@ -382,7 +414,7 @@ def run_project_triage(id: str):
     from tools.triage import triage_report
     from pathlib import Path
     
-    ws = Path(f"data/runs/{id}/workspace")
+    ws = Path(paths.workspace_path(id))
     if not ws.exists():
         if state.benchmark_id:
             reg_path = "benchmarks/registry.json"
@@ -410,7 +442,11 @@ def stream_events(id: str, request: Request, last_event_id: Optional[str] = Head
         last_id = int(raw_id)
     except (ValueError, TypeError):
         last_id = 0
-    return StreamingResponse(stream_manager.event_generator(id, last_id), media_type="text/event-stream")
+    return StreamingResponse(
+        stream_manager.event_generator(id, last_id, request=request),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 @router.get("/api/projects/{id}/approvals/pending")
 def get_pending_approval(id: str):
@@ -424,34 +460,81 @@ def get_pending_approval(id: str):
         raise HTTPException(status_code=404, detail="Patch not found")
         
     reviews = [r for r in state.critic_reviews if r.patch_id == patch_id]
-    
+
+    # The UI needs to know whether the operator must tick the extra-confirmation box. Without
+    # it the box never rendered, while process_approval rejected any approve on a bannered
+    # patch for lack of confirm_extra, so bannered patches could not be approved at all.
+    # A banner always demands explicit confirmation; policy may demand it independently.
+    policy_result = patch.policy_result or {}
+    requires_extra_confirm = bool(
+        state.pending.get("banner") or policy_result.get("requires_extra_confirm")
+    )
+
     return {
         "approval_id": state.pending.get("id"),
+        # Approval ids repeat across projects; the client must send this back with its decision.
+        "project_id": id,
         "patch": patch.model_dump(),
         "reviews": [r.model_dump() for r in reviews],
+        # Latest review, for clients that want a single object rather than the history.
+        "critic_review": reviews[-1].model_dump() if reviews else None,
+        "requires_extra_confirm": requires_extra_confirm,
         "banner": state.pending.get("banner")
     }
 
-@router.post("/api/approvals/{approval_id}")
-def process_approval(approval_id: str, req: ApprovalRequest):
-    # Search all projects for this pending approval ID
-    conn = get_connection("data/rerun.db")
+def _find_project_by_pending_id(pending_id: str, db_path: str = "data/rerun.db") -> Optional[str]:
+    """
+    Locates the project whose pending gate carries `pending_id`, reading the raw JSON rather
+    than validating every ProjectState. A single unreadable row must not break approvals for
+    every other project, so the scan never constructs a model.
+    """
+    conn = get_connection(db_path)
     cursor = conn.cursor()
-    cursor.execute("SELECT id FROM projects")
+    cursor.execute("SELECT id, state_json FROM projects")
     rows = cursor.fetchall()
     conn.close()
-    
-    target_project_id = None
-    state = None
-    for row in rows:
-        proj_id = row[0]
-        s = get_project_state("data/rerun.db", proj_id)
-        if s and s.pending and s.pending.get("id") == approval_id:
-            target_project_id = proj_id
-            state = s
-            break
-            
+
+    matches = []
+    for proj_id, state_json in rows:
+        if not state_json:
+            continue
+        try:
+            pending = json.loads(state_json).get("pending")
+        except Exception:
+            continue
+        if isinstance(pending, dict) and pending.get("id") == pending_id:
+            matches.append(proj_id)
+
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        # Ambiguous: the id names a gate in several projects. Guessing one silently applies
+        # the decision to a project the operator never looked at, which is how an approved
+        # patch could sit unapplied forever while every approval landed elsewhere.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Approval id {pending_id!r} is pending in {len(matches)} projects; "
+                "name the project (POST /api/projects/{project_id}/approvals/{approval_id})"
+            ),
+        )
+    return None
+
+@router.post("/api/projects/{project_id}/approvals/{approval_id}")
+def process_project_approval(project_id: str, approval_id: str, req: ApprovalRequest):
+    """Unambiguous form of the approval endpoint: the project is in the path."""
+    req.project_id = project_id
+    return process_approval(approval_id, req)
+
+@router.post("/api/approvals/{approval_id}")
+def process_approval(approval_id: str, req: ApprovalRequest):
+    # The caller should name the project; only fall back to a scan for older clients.
+    target_project_id = req.project_id or _find_project_by_pending_id(approval_id)
     if not target_project_id:
+        raise HTTPException(status_code=404, detail="Approval not found")
+
+    state = get_project_state("data/rerun.db", target_project_id)
+    if not state or not state.pending or state.pending.get("id") != approval_id:
         raise HTTPException(status_code=404, detail="Approval not found")
         
     # Idempotent: check if already approved
@@ -485,7 +568,7 @@ def process_approval(approval_id: str, req: ApprovalRequest):
             else:
                 raise HTTPException(status_code=400, detail="Invalid edit format")
 
-        ws = state.workspace or f"data/runs/{target_project_id}/workspace"
+        ws = state.workspace or paths.workspace_path(target_project_id)
         candidate_patch = patch.model_copy(deep=True)
         candidate_patch.edits = parsed_edits
 
@@ -534,7 +617,7 @@ def process_approval(approval_id: str, req: ApprovalRequest):
         state.phase = "PATCH_APPLY"
 
         save_project_state("data/rerun.db", target_project_id, state.benchmark_id, state.repo_commit, state.phase, state)
-        start_project_worker(target_project_id)
+        start_project_worker(target_project_id, allow_resume=True)
         return {"status": "applied_and_approved", "patch": patch.model_dump()}
 
     appr = Approval(
@@ -549,7 +632,7 @@ def process_approval(approval_id: str, req: ApprovalRequest):
     
     state.approvals.append(appr)
     save_project_state("data/rerun.db", target_project_id, state.benchmark_id, state.repo_commit, state.phase, state)
-    start_project_worker(target_project_id)
+    start_project_worker(target_project_id, allow_resume=True)
     return {"status": "processed"}
 
 @router.get("/api/projects/{id}/evidence")
@@ -561,7 +644,7 @@ def list_evidence(id: str):
     items = get_all_evidence("data/rerun.db", id)
     if items:
         return items
-    ledger_path = f"data/runs/{id}/evidence.json"
+    ledger_path = str(paths.evidence_ledger_path(id))
     if os.path.exists(ledger_path):
         try:
             with open(ledger_path, "r", encoding="utf-8") as f:
@@ -579,7 +662,7 @@ def get_evidence(id: str, eid: str):
     item = get_evidence_by_id("data/rerun.db", id, eid)
     if item:
         return item
-    ledger_path = f"data/runs/{id}/evidence.json"
+    ledger_path = str(paths.evidence_ledger_path(id))
     if os.path.exists(ledger_path):
         try:
             with open(ledger_path, "r", encoding="utf-8") as f:
@@ -594,13 +677,35 @@ def get_evidence(id: str, eid: str):
 @router.get("/api/projects/{id}/runs/{n}/log")
 @router.get("/api/projects/{id}/logs/{n}")
 def get_run_log(id: str, n: int, tail: Optional[int] = None):
-    log_path = f"data/runs/{id}/logs/run_{n}.log"
-    if not os.path.exists(log_path):
+    """
+    Serves an attempt's log. Attempt logs are named <kind>_<n>.log, so a failed dependency
+    install writes setup_<n>.log; hardcoding run_<n>.log here used to 404 precisely when
+    there was an install error to read. Resolution is delegated to the orchestrator's helper.
+    """
+    from agent.loop import resolve_attempt_log
+
+    log_path = None
+    state = get_project_state("data/rerun.db", id)
+    if state:
+        resolved = resolve_attempt_log(state, {}, n)
+        if resolved:
+            log_path = str(resolved)
+
+    if log_path is None:
+        # No project state (or no attempt recorded yet): fall back to the on-disk convention.
+        log_dir = paths.logs_dir(id)
+        matches = sorted(log_dir.glob(f"*_{n}.log")) if log_dir.is_dir() else []
+        if matches:
+            log_path = str(matches[0])
+
+    if not log_path or not os.path.exists(log_path):
         raise HTTPException(status_code=404, detail="Log not found")
+
     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
         lines = f.readlines()
     if tail and tail > 0:
         lines = lines[-tail:]
+    # Response shape is a fixed contract (see test_aligned_log_routes_contract): {"log": ...}
     return {"log": "".join(lines)}
 
 @router.get("/api/projects/{id}/report")
@@ -678,7 +783,7 @@ def delete_project(id: str):
 
     # Delete on-disk run directory
     import shutil
-    run_dir = Path(f"data/runs/{id}")
+    run_dir = paths.run_dir(id)
     if run_dir.exists():
         shutil.rmtree(run_dir, ignore_errors=True)
 
@@ -696,7 +801,7 @@ def delete_project(id: str):
 @router.get("/api/projects/{id}/disk")
 def get_project_disk(id: str):
     """Returns total disk usage for a project's run directory."""
-    run_dir = Path(f"data/runs/{id}")
+    run_dir = paths.run_dir(id)
     total_bytes = 0
     if run_dir.exists():
         for p in run_dir.rglob("*"):

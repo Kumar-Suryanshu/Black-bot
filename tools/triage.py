@@ -5,6 +5,12 @@ import sys
 from pathlib import Path
 from typing import Dict, Any, List, Set, Optional, Tuple
 
+# Share of a repository's functions that must be empty stubs before an empty body is treated
+# as "this repository is unfinished" rather than an ordinary no-op hook. A single
+# `def on_epoch_end(self): pass` is idiomatic in research code and must not block execution;
+# a repository whose functions are *mostly* empty genuinely cannot reproduce anything.
+STUB_RATIO_BLOCK_THRESHOLD = 0.5
+
 # Known CUDA-only packages that cannot execute in CPU-only offline sandboxes
 CUDA_ONLY_PACKAGES = {
     "cupy", "apex", "flash-attn", "flash_attn", "bitsandbytes",
@@ -280,6 +286,7 @@ class CodeCompletenessVisitor(ast.NodeVisitor):
     def __init__(self, rel_path: str):
         self.rel_path = rel_path
         self.stubs: List[Dict[str, Any]] = []
+        self.function_count: int = 0
 
     def visit_Raise(self, node: ast.Raise):
         if node.exc:
@@ -294,10 +301,12 @@ class CodeCompletenessVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef):
+        self.function_count += 1
         self._check_empty_body(node)
         self.generic_visit(node)
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
+        self.function_count += 1
         self._check_empty_body(node)
         self.generic_visit(node)
 
@@ -391,6 +400,8 @@ def triage_report(workspace: str) -> Dict[str, Any]:
     missing_local_modules: List[Dict[str, Any]] = []
     stubs: List[Dict[str, Any]] = []
     syntax_errors: List[Dict[str, Any]] = []
+    total_functions: int = 0
+    has_entry_point: bool = False
 
     unguarded_cuda_list: List[Dict[str, Any]] = []
     guarded_cuda_list: List[Dict[str, Any]] = []
@@ -458,6 +469,9 @@ def triage_report(workspace: str) -> Dict[str, Any]:
         stub_vis = CodeCompletenessVisitor(rel_str)
         stub_vis.visit(tree)
         stubs.extend(stub_vis.stubs)
+        total_functions += stub_vis.function_count
+        if '__name__' in content and '__main__' in content:
+            has_entry_point = True
 
         # Check imports & references
         for node in ast.walk(tree):
@@ -591,74 +605,100 @@ def triage_report(workspace: str) -> Dict[str, Any]:
     python_req = detect_python_version_requirement(root)
 
     # 6. Formulate Verdict & Evidence
+    #
+    # Findings are collected independently and the verdict is then chosen by priority. The
+    # previous if/elif ladder stopped at the first match, so a lower-priority but genuine
+    # finding (a hard GPU requirement, missing data) was discarded entirely whenever a
+    # higher-priority one fired. Every finding is now reported; only the headline verdict
+    # is decided by priority.
     blockers: List[str] = []
     warnings: List[str] = []
     evidence: List[str] = []
-    verdict: str = "FEASIBLE"
-    reason: str = "Repository is feasible for offline sandboxed execution."
 
-    # Priority 1: Syntax errors & Incomplete repo stubs
+    # (priority, verdict, reason, blocker_name) for each finding that actually applies
+    findings: List[Tuple[int, str, str, str]] = []
+
+    # --- Priority 1: the repository cannot be run as shipped ---
     if syntax_errors:
-        verdict = "INCOMPLETE_REPO"
-        reason = f"Syntax errors detected in {len(syntax_errors)} files."
+        findings.append((1, "INCOMPLETE_REPO", f"Syntax errors detected in {len(syntax_errors)} files.", "syntax_error"))
         for err in syntax_errors:
             evidence.append(f"{err['file']}:{err['line']} - {err['text']}")
-        blockers.append("syntax_error")
 
-    elif missing_local_modules:
-        verdict = "INCOMPLETE_REPO"
-        reason = f"Missing local module imports: {missing_local_modules[0]['module']}"
+    if missing_local_modules:
+        findings.append((1, "INCOMPLETE_REPO", f"Missing local module imports: {missing_local_modules[0]['module']}", "missing_local_module"))
         for mlm in missing_local_modules:
             evidence.append(f"{mlm['file']}:{mlm['line']} - missing local module '{mlm['module']}'")
-        blockers.append("missing_local_module")
 
-    elif readme_scripts_missing:
-        verdict = "INCOMPLETE_REPO"
-        reason = f"README-mentioned script '{readme_scripts_missing[0]}' does not exist."
+    if readme_scripts_missing:
+        findings.append((1, "INCOMPLETE_REPO", f"README-mentioned script '{readme_scripts_missing[0]}' does not exist.", "missing_readme_script"))
         evidence.append(f"README.md: script '{readme_scripts_missing[0]}' not found on disk")
-        blockers.append("missing_readme_script")
 
-    elif any(s["type"] in ["not_implemented_error", "pass_stub", "ellipsis_stub"] for s in stubs):
-        crit_stubs = [s for s in stubs if s["type"] in ["not_implemented_error", "pass_stub", "ellipsis_stub"]]
-        verdict = "INCOMPLETE_REPO"
-        reason = f"Unimplemented stubs ({crit_stubs[0]['type']}) found in code."
-        for s in crit_stubs:
-            evidence.append(f"{s['file']}:{s['line']} - {s['text']}")
-        blockers.append("unimplemented_stubs")
+    # Unimplemented stubs. An explicit `raise NotImplementedError` is always a blocker: it is
+    # an author's statement that the code path is absent. An empty `pass`/`...` body is not,
+    # on its own, evidence of an unfinished repository; no-op hooks and placeholder base
+    # methods are idiomatic. It blocks only when such stubs dominate the repository and there
+    # is no entry point to run.
+    not_implemented = [st for st in stubs if st["type"] == "not_implemented_error"]
+    empty_body_stubs = [st for st in stubs if st["type"] in ("pass_stub", "ellipsis_stub")]
 
-    # Priority 2: Hard GPU requirements (D5 fix)
-    elif unguarded_cuda_list or cuda_packages_found:
-        verdict = "NEEDS_GPU"
-        reason = "Hard GPU requirement detected (unguarded CUDA calls or CUDA-only packages)."
-        blockers.append("gpu_required")
+    if not_implemented:
+        findings.append((1, "INCOMPLETE_REPO", "Unimplemented stubs (not_implemented_error) found in code.", "unimplemented_stubs"))
+        for st in not_implemented:
+            evidence.append(f"{st['file']}:{st['line']} - {st['text']}")
+
+    if empty_body_stubs:
+        stub_ratio = (len(empty_body_stubs) / total_functions) if total_functions else 1.0
+        dominates = stub_ratio >= STUB_RATIO_BLOCK_THRESHOLD
+        if dominates and not has_entry_point:
+            findings.append((
+                1, "INCOMPLETE_REPO",
+                f"Unimplemented stubs ({empty_body_stubs[0]['type']}) make up "
+                f"{len(empty_body_stubs)}/{total_functions} functions with no entry point.",
+                "unimplemented_stubs"
+            ))
+            for st in empty_body_stubs:
+                evidence.append(f"{st['file']}:{st['line']} - {st['text']}")
+        else:
+            warnings.append(
+                f"Repository contains {len(empty_body_stubs)} empty function "
+                f"{'body' if len(empty_body_stubs) == 1 else 'bodies'} out of {total_functions} "
+                f"functions (likely no-op hooks, not blocking): "
+                + ", ".join(f"{st['file']}:{st['line']}" for st in empty_body_stubs[:5])
+            )
+
+    # --- Priority 2: hard GPU requirement (D5) ---
+    if unguarded_cuda_list or cuda_packages_found:
+        findings.append((2, "NEEDS_GPU", "Hard GPU requirement detected (unguarded CUDA calls or CUDA-only packages).", "gpu_required"))
         for u in unguarded_cuda_list:
             evidence.append(f"{u['file']}:{u['line']} - {u['text']}")
         for cp in cuda_packages_found:
             evidence.append(f"requirements.txt: CUDA-only package '{cp}'")
 
-    # Priority 3: Large resources / missing data files
-    elif missing_data_refs:
-        # Check if missing data files are crucial
-        verdict = "NEEDS_LARGE_RESOURCES"
-        reason = f"Required data files missing from repository ({len(missing_data_refs)} files)."
-        blockers.append("data_unavailable")
+    # --- Priority 3: resources the sandbox cannot supply ---
+    if missing_data_refs:
+        findings.append((3, "NEEDS_LARGE_RESOURCES", f"Required data files missing from repository ({len(missing_data_refs)} files).", "data_unavailable"))
         for d in missing_data_refs[:5]:
             evidence.append(f"data_refs: '{d}' referenced but not found")
 
-    elif distributed_hints:
-        verdict = "NEEDS_LARGE_RESOURCES"
-        reason = "Distributed multi-GPU training required."
-        blockers.append("distributed_required")
+    if distributed_hints:
+        findings.append((3, "NEEDS_LARGE_RESOURCES", "Distributed multi-GPU training required.", "distributed_required"))
         for dh in distributed_hints:
             evidence.append(f"{dh['file']}: {dh['text']}")
 
-    # Priority 4: Feasible with provisioning vs Clean Feasible
+    # Every applicable finding contributes its blocker, regardless of which one is headline.
+    for _prio, _verdict, _reason, blocker_name in findings:
+        if blocker_name and blocker_name not in blockers:
+            blockers.append(blocker_name)
+
+    if findings:
+        findings.sort(key=lambda f: f[0])
+        _prio, verdict, reason, _blocker = findings[0]
+    # --- Priority 4: runnable, with or without provisioning ---
     elif imports_unresolved or len(declared_deps) > 2:
         verdict = "FEASIBLE_WITH_PROVISIONING"
         reason = "Repository is feasible but requires dependency provisioning."
         if imports_unresolved:
             warnings.append(f"Unresolved imports may need provisioning: {list(imports_unresolved)[:5]}")
-
     else:
         verdict = "FEASIBLE"
         reason = "Repository structure is complete, CPU-compatible, and runnable."

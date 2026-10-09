@@ -13,31 +13,44 @@ export function useEventStream({ projectId, onEvent, onError }: UseEventStreamOp
   const lastEventIdRef = useRef<number>(0);
   const esRef = useRef<EventSource | null>(null);
 
+  // Keep the latest callbacks in refs so the effect does not need them as dependencies,
+  // and so a reconnect never invokes a stale closure.
+  const onEventRef = useRef(onEvent);
+  const onErrorRef = useRef(onError);
+  onEventRef.current = onEvent;
+  onErrorRef.current = onError;
+
   useEffect(() => {
     if (!projectId) {
       setConnectionStatus('idle');
       return;
     }
 
-    // Restore last seen event id from sessionStorage for seamless reload resume
-    const storedLastId = sessionStorage.getItem(`rerun_last_event_${projectId}`);
-    if (storedLastId) {
-      const parsed = parseInt(storedLastId, 10);
-      if (!isNaN(parsed) && parsed > 0) {
-        lastEventIdRef.current = Math.max(lastEventIdRef.current, parsed);
-      }
-    }
+    // A fresh mount always replays the full history from the database.
+    //
+    // This used to resume from a last-event-id persisted in sessionStorage, so reloading the
+    // page asked the server only for events *after* the ones already seen. The server had
+    // nothing new to send, the component started with an empty array, and the whole execution
+    // trace vanished on refresh even though every event was still safely in the database.
+    //
+    // The in-memory ref below is still used for reconnects within this page session, where
+    // skipping already-rendered events is correct.
+    lastEventIdRef.current = 0;
+    let isFirstConnect = true;
+    let cancelled = false;
 
     setConnectionStatus('reconnecting');
     let reconnectTimeout: any = null;
 
     function connect() {
+      if (cancelled) return;
       if (esRef.current) {
         esRef.current.close();
       }
 
-      // Resume from Last-Event-ID across page refreshes and disconnects
-      const resumeId = lastEventIdRef.current;
+      const resumeId = isFirstConnect ? 0 : lastEventIdRef.current;
+      isFirstConnect = false;
+
       const url = `/api/projects/${projectId}/events?last_event_id=${resumeId}`;
       const es = new EventSource(url);
       esRef.current = es;
@@ -51,12 +64,11 @@ export function useEventStream({ projectId, onEvent, onError }: UseEventStreamOp
           const data: Event = JSON.parse(msgEvent.data);
           if (data && data.id) {
             lastEventIdRef.current = Math.max(lastEventIdRef.current, data.id);
-            sessionStorage.setItem(`rerun_last_event_${projectId}`, String(lastEventIdRef.current));
             setEvents((prev) => {
               if (prev.some((e) => e.id === data.id)) return prev;
               return [...prev, data];
             });
-            onEvent?.(data);
+            onEventRef.current?.(data);
           }
         } catch (e) {
           console.error('Failed to parse SSE event data', e);
@@ -65,7 +77,7 @@ export function useEventStream({ projectId, onEvent, onError }: UseEventStreamOp
 
       es.onerror = (err) => {
         setConnectionStatus('reconnecting');
-        onError?.(err);
+        onErrorRef.current?.(err);
         es.close();
         reconnectTimeout = setTimeout(connect, 3000);
       };
@@ -74,8 +86,10 @@ export function useEventStream({ projectId, onEvent, onError }: UseEventStreamOp
     connect();
 
     return () => {
+      cancelled = true;
       if (esRef.current) {
         esRef.current.close();
+        esRef.current = null;
       }
       if (reconnectTimeout) {
         clearTimeout(reconnectTimeout);

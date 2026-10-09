@@ -7,6 +7,7 @@ import difflib
 import shutil
 from pathlib import Path
 from typing import List, Dict, Any, Optional
+from tools import paths
 
 logger = logging.getLogger(__name__)
 
@@ -265,15 +266,175 @@ def check_package_wheel_availability(pkg_name: str) -> Dict[str, Any]:
         "reason": "Binary wheel available"
     }
 
-def build_provisioning_plan(workspace: str, project_id: str) -> Dict[str, Any]:
+# Imports that are satisfied by the standard library or by the base image, so they should
+# never be turned into provisioning requests.
+_NEVER_PROVISION = {"setuptools", "pip", "wheel", "distutils"}
+
+def _local_module_names(workspace: str) -> set:
+    """
+    Every module name that resolves to a file or package inside the repository, at any depth.
+
+    Triage registers only top-level modules as local, so a sibling import such as
+    `import data` from inside experiment-spring/ is reported as unresolved. Without this
+    filter those names become provisioning requests, and the agent would try to pip install
+    a package named after the repository's own module.
+    """
+    names = set()
+    root = Path(workspace)
+    if not root.is_dir():
+        return names
+    for path in root.rglob("*"):
+        if any(part in (".git", "__pycache__", ".site", ".pytest_cache") for part in path.parts):
+            continue
+        if path.is_file() and path.suffix == ".py":
+            names.add(path.stem.lower())
+        elif path.is_dir():
+            names.add(path.name.lower())
+    return names
+
+def reachable_third_party_imports(workspace: str, entry_script: str) -> Optional[set]:
+    """
+    Third-party import roots reachable from one entry script, following local imports.
+
+    Provisioning used to request every unresolved import in the repository. For a repo of
+    independent experiments that means installing another experiment's dependencies to run
+    this one: the Hamiltonian Neural Networks spring task needs torch, numpy, scipy and
+    autograd, but the whole-repo scan also demanded gym and imageio, which only the pixel
+    experiment uses. An offline install then fails on packages the run never imports.
+
+    Returns None when the entry script cannot be analysed, so the caller falls back to the
+    whole-repository scan.
+    """
+    import ast
+    from tools.triage import get_stdlib_module_names
+
+    root = Path(workspace)
+    entry = root / entry_script
+    if not entry.is_file():
+        return None
+
+    stdlib = get_stdlib_module_names()
+    local_names = {
+        f.stem.lower() for f in root.rglob("*.py")
+        if not any(part in (".git", "__pycache__", ".site") for part in f.parts)
+    }
+    local_names |= {d.name.lower() for d in root.rglob("*") if d.is_dir()}
+
+    seen_files, queue, third_party = set(), [entry], set()
+    while queue:
+        current = queue.pop()
+        if current in seen_files or not current.is_file():
+            continue
+        seen_files.add(current)
+        try:
+            tree = ast.parse(current.read_text(encoding="utf-8", errors="ignore"))
+        except Exception:
+            continue
+        for node in ast.walk(tree):
+            names = []
+            if isinstance(node, ast.Import):
+                names = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names = [node.module]
+            for name in names:
+                head = name.split(".")[0]
+                low = head.lower()
+                if low in stdlib:
+                    continue
+                if low in local_names:
+                    # Follow the local module so its imports count too.
+                    for cand in (root / f"{head}.py", current.parent / f"{head}.py",
+                                 root / head / "__init__.py"):
+                        if cand.is_file():
+                            queue.append(cand)
+                    continue
+                third_party.add(low)
+    return third_party or None
+
+
+def infer_packages_from_imports(
+    triage_report: Optional[dict],
+    workspace: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Derives provisioning candidates from triage's unresolved imports.
+
+    A repository with no requirements.txt, pyproject.toml, setup.cfg or environment.yml
+    produced no provisioning plan at all, so its third-party imports could never be
+    installed and the run always died at the first `import`. Triage already knows exactly
+    which imports it could not resolve; use them.
+    """
+    if not triage_report:
+        return []
+
+    from tools.triage import MODULE_PACKAGE_ALIASES
+
+    unresolved = (triage_report.get("imports") or {}).get("unresolved") or []
+    local_names = _local_module_names(workspace) if workspace else set()
+
+    packages: List[Dict[str, Any]] = []
+    seen = set()
+    for module in unresolved:
+        root = str(module).split(".")[0].strip().lower()
+        if not root or root in _NEVER_PROVISION:
+            continue
+        if root in local_names:
+            # The repository's own module, not a third-party package.
+            continue
+        # Prefer the known pip name for modules whose import name differs (yaml -> pyyaml).
+        candidates = MODULE_PACKAGE_ALIASES.get(root, [root])
+        pkg_name = normalize_package_name(candidates[0])
+        if pkg_name in seen:
+            continue
+        seen.add(pkg_name)
+        packages.append({
+            "name": pkg_name,
+            "raw_spec": pkg_name,
+            "version_constraint": "",
+            "source_file": "inferred from unresolved imports",
+        })
+    return packages
+
+def build_provisioning_plan(
+    workspace: str,
+    project_id: str,
+    triage_report: Optional[dict] = None,
+    entry_script: Optional[str] = None
+) -> Dict[str, Any]:
     """
     Constructs a dependency provisioning plan.
     Identifies packages, checks wheel status, and triggers NEEDS_BUILD if sdist-only.
     Includes warnings for typosquatting, CPU torch, and unpinned dependency drift.
+
+    When the repository declares no dependencies at all, falls back to the unresolved
+    imports found by triage so such a repository is still installable.
     """
     packages = parse_dependency_files(workspace)
-    python_image = select_python_image(workspace)
-    target_whl = f"data/runs/{project_id}/wheelhouse"
+    inferred_from_imports = False
+    if not packages:
+        packages = infer_packages_from_imports(triage_report, workspace)
+        inferred_from_imports = bool(packages)
+        # Narrow to what the command being run actually imports, so one experiment's
+        # dependencies are not required to run another's.
+        if packages and entry_script:
+            reachable = reachable_third_party_imports(workspace, entry_script)
+            if reachable:
+                scoped = [
+                    pkg for pkg in packages
+                    if normalize_package_name(pkg["name"]) in {
+                        normalize_package_name(r) for r in reachable
+                    } or any(
+                        normalize_package_name(alias) == normalize_package_name(pkg["name"])
+                        for r in reachable
+                        for alias in __import__(
+                            "tools.triage", fromlist=["MODULE_PACKAGE_ALIASES"]
+                        ).MODULE_PACKAGE_ALIASES.get(r, [r])
+                    )
+                ]
+                if scoped:
+                    packages = scoped
+    python_image = select_python_image(workspace, triage_report)
+    target_whl = str(paths.wheelhouse_dir(project_id))
 
     if not packages:
         return {
@@ -331,13 +492,22 @@ def build_provisioning_plan(workspace: str, project_id: str) -> Dict[str, Any]:
             "target_wheelhouse": target_whl
         }
 
+    if inferred_from_imports:
+        warnings.insert(0, (
+            "This repository declares no dependencies (no requirements.txt, pyproject.toml, "
+            "setup.cfg or environment.yml). The packages below were inferred from imports "
+            "that triage could not resolve, and their versions are unpinned. Review them "
+            "before approving."
+        ))
+
     return {
         "needed": True,
         "status": "PROPOSED",
         "packages": annotated,
         "warnings": warnings,
         "python_image": python_image,
-        "target_wheelhouse": target_whl
+        "target_wheelhouse": target_whl,
+        "inferred_from_imports": inferred_from_imports
     }
 
 def download_wheels_for_project(
@@ -355,7 +525,7 @@ def download_wheels_for_project(
     dest_wheelhouse = Path(dest_wheelhouse).absolute()
     dest_wheelhouse.mkdir(parents=True, exist_ok=True)
 
-    log_dir = Path("data") / "runs" / project_id / "logs"
+    log_dir = paths.logs_dir(project_id)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / "provisioning.log"
 
@@ -398,9 +568,20 @@ def download_wheels_for_project(
         try:
             import docker
             client = docker.from_env()
+            # Download ONLY what is still missing. Passing the full requirements file made
+            # pip re-fetch packages already copied from the shared wheelhouse, and fetch them
+            # from the default index: for torch that means the CUDA build and its
+            # multi-gigabyte nvidia dependencies rather than the CPU wheel already present.
+            # A provisioning step that should take seconds stalled for many minutes.
+            missing_file = dest_wheelhouse / "requirements.missing.txt"
+            with open(missing_file, "w", encoding="utf-8") as mf:
+                for pkg in remaining:
+                    mf.write(f"{pkg}\n")
+            logs.append(f"Downloading only the missing packages: {remaining}")
+
             container_log = client.containers.run(
                 image=python_image,
-                command=["pip", "download", "--only-binary=:all:", "-d", "/wheelhouse", "-r", "/wheelhouse/requirements.provision.txt"],
+                command=["pip", "download", "--only-binary=:all:", "-d", "/wheelhouse", "-r", "/wheelhouse/requirements.missing.txt"],
                 volumes={
                     str(dest_wheelhouse): {"bind": "/wheelhouse", "mode": "rw"}
                 },

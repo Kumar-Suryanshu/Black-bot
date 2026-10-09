@@ -16,6 +16,7 @@ from agent.state import (
 )
 from tools.kit import build_reproduction_kit, generate_reproduce_markdown
 from tools.report import generate_report
+from tools import paths
 
 def create_mock_completed_state(project_id: str = "proj_stage10_test", simulated: bool = False) -> ProjectState:
     state = ProjectState(
@@ -282,7 +283,7 @@ def test_api_evidence_ledger_endpoints_and_drawer(tmp_path, monkeypatch):
         {
             "id": "E-001",
             "type": "log",
-            "artifact_path": "data/runs/proj_ev_test/logs/run_1.log",
+            "artifact_path": str(paths.logs_dir("proj_ev_test") / "run_1.log"),
             "line_start": 10,
             "line_end": 15,
             "sha256": "abc123sha",

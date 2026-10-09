@@ -20,10 +20,24 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--systems", type=str, default="B-0,B-2,Rerun", help="Comma separated systems: B-0,B-2,Rerun")
     parser.add_argument("--repeats", type=int, default=3, help="Number of repeats per case")
+    parser.add_argument(
+        "--live-llm", action="store_true",
+        help="Drive the Rerun system with the configured live LLM provider instead of the "
+             "scripted FakeLLM. Default is the scripted FakeLLM, which measures the "
+             "orchestrator rather than a model."
+    )
     args = parser.parse_args()
-    
+
     systems = [s.strip() for s in args.systems.split(",") if s.strip()]
     repeats = args.repeats
+    use_fake_llm = not args.live_llm
+
+    # Provenance for the artifact. The Rerun rows have always been produced with scripted LLM
+    # replies, so MEASURED.md measures the orchestrator, not a model. Stamping it here stops
+    # the artifact from being read as a live-model result.
+    from agent.config import SOLVER_MODEL
+    llm_provenance = "scripted FakeLLM (orchestrator only, not a model measurement)" if use_fake_llm else f"live provider, model {SOLVER_MODEL}"
+    sandbox_provenance = os.getenv("SANDBOX_TYPE", "docker")
     
     with open("benchmarks/registry.json") as f:
         registry = json.load(f)
@@ -117,7 +131,7 @@ def main():
                     print(f"Running {sys_name} on {case_id} (run {i+1}/{repeats})...")
                     start_t = time.time()
                     try:
-                        st = run_case_headless(case_id, auto_approve=True, use_fake_llm=True)
+                        st = run_case_headless(case_id, auto_approve=True, use_fake_llm=use_fake_llm)
                         status = st.final.get("status") if st.final else st.phase
                         patches_proposed = len(st.patches)
                         patches_applied = len([p for p in st.patches if p.status == "applied"])
@@ -152,7 +166,9 @@ def main():
                         "evidence_completeness": 1,
                         "hallucinated_evidence_counters": 0,
                         "critic_verdicts": "SUPPORTED" if patches_applied > 0 else "",
-                        "human_simulated": True
+                        "human_simulated": True,
+                        "llm_mode": "fake_scripted" if use_fake_llm else "live",
+                        "sandbox_type": sandbox_provenance
                     }
                     results.append(res)
                     print(f"Result: {status} (matches gold: {matches_gold})")
@@ -182,8 +198,17 @@ def main():
             summary_rows.append(row)
 
         md = "# Track A Benchmark Evaluation Results\n\n"
+        if use_fake_llm:
+            md += (
+                "> **How to read this:** the Rerun rows were produced with **scripted LLM "
+                "replies** (FakeLLM), not a live model. They measure the orchestrator, the "
+                "policy engine and the sandbox, and say nothing about model capability. "
+                "Re-run with `--live-llm` for a model measurement.\n\n"
+            )
         md += f"**Timestamp:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
-        md += f"**Sandbox:** Docker (`DockerSandbox`, image: `rerun-base:py311`, offline network)\n"
+        md += f"**LLM:** {llm_provenance}\n"
+        md += f"**Sandbox:** `SANDBOX_TYPE={sandbox_provenance}`"
+        md += " (`DockerSandbox`, image: `rerun-base:py311`, offline network)\n" if sandbox_provenance == "docker" else " (**simulated**, not a real container)\n"
         md += f"**Repeats:** {repeats} per condition\n\n"
 
         md += "## Summary Table (Counts Only)\n\n"

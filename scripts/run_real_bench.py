@@ -55,7 +55,7 @@ def run_real_bench(use_docker: bool = True):
         if category in ("missing_external_dataset_control", "gpu_infeasible_control"):
             time.sleep(0.5)  # Automated triage detection
             final_status = "correctly triaged out"
-            rerun_min = case["rerun_minutes"]
+            rerun_min = (time.time() - start_time) / 60.0
             print(f"  -> Triage: Preflight check identified {case.get('failure_taxonomy')}.")
             print(f"  -> Outcome: {final_status}")
         else:
@@ -139,9 +139,14 @@ def run_real_bench(use_docker: bool = True):
                 final_status = "not reproduced"
                 failure_mode = "paper/code genuinely diverge"
 
-            rerun_min = case["rerun_minutes"]
+            # Use the wall-clock time actually spent, not the registry constant. The elapsed
+            # time was already being measured here and then discarded in favour of
+            # case["rerun_minutes"], which made the "Measured Speedup" headline a restatement
+            # of hand-written inputs rather than a measurement.
+            rerun_min = (time.time() - start_time) / 60.0
             print(f"  -> Observed Metric: {observed_metric} (Target: {case.get('target_value')})")
             print(f"  -> Outcome: {final_status}")
+            print(f"  -> Measured wall clock: {rerun_min:.2f} min (registry estimate: {case['rerun_minutes']} min)")
 
         total_rerun_min += rerun_min
 
@@ -175,8 +180,9 @@ def run_real_bench(use_docker: bool = True):
 
     print("\n" + "=" * 70)
     print(f"EVALUATION COMPLETE: {len(results)} cases evaluated.")
-    print(f"Total Human Time: {total_human_min:.1f} min | Total Rerun Time: {total_rerun_min:.1f} min")
-    print(f"Speedup Factor: {total_human_min / total_rerun_min:.1f}x")
+    print(f"Human baseline (estimated, not measured): {total_human_min:.1f} min")
+    print(f"Rerun wall clock (measured): {total_rerun_min:.2f} min")
+    print("No speedup ratio is reported: the two figures describe different artifacts.")
     print(f"Results written to: {authoritative_md} and {timestamped_md}")
     print("=" * 70)
 
@@ -187,9 +193,23 @@ def write_measured_markdown(file_path: str, results: list, ts: str, human_t: flo
         f"**Evaluation Timestamp:** {ts}  ",
         "**Execution Environment:** Real Docker (`DockerSandbox`, base image `rerun-base:py311`)  ",
         f"**Total Real Cases Evaluated:** {len(results)}  ",
-        f"**Total Human Ground-Truth Time:** {human_t:.1f} minutes ({human_t/60.0:.2f} hours)  ",
-        f"**Total Rerun Execution Time:** {rerun_t:.1f} minutes ({rerun_t/60.0:.2f} hours)  ",
-        f"**Measured Speedup:** {human_t / rerun_t:.1f}x  ",
+        f"**Total Human Baseline (published/estimated, NOT measured here):** {human_t:.1f} minutes ({human_t/60.0:.2f} hours)  ",
+        f"**Total Rerun Execution Time (measured wall clock):** {rerun_t:.1f} minutes ({rerun_t/60.0:.2f} hours)  ",
+        "",
+        "> **No speedup figure is reported, deliberately.** Dividing the published human "
+        "estimate for the paper's *original* repository by the wall clock of the *local "
+        "reimplementation* in this harness compares two different things, and the quotient is "
+        "not a speedup. An earlier version of this document reported such a ratio as a "
+        "\"Measured Speedup\"; it was derived entirely from hand-written constants in "
+        "`benchmarks/real/real_cases.json` and has been removed.",
+        "",
+        "> **How to read this.** The rerun times are measured wall clock. The human times are "
+        "estimates carried in `benchmarks/real/real_cases.json` and were not measured here.",
+        "",
+        "> **What actually executed.** Each case runs the self-contained reimplementation in "
+        "`benchmarks/real/cases/<case_id>/`, not a clone of the upstream repository. The "
+        "`repo_url` and `commit_sha` in the registry identify the paper's original code for "
+        "provenance; they are not fetched or executed by this harness.",
         "",
         "---",
         "",
@@ -197,7 +217,7 @@ def write_measured_markdown(file_path: str, results: list, ts: str, human_t: flo
         "",
         "Every evaluated case was classified under the rigorous §R8 evaluation taxonomy. All failures are explicitly disclosed and categorized.",
         "",
-        "| Case ID | Title | Category | Human Time (m) | Rerun Time (m) | Final Classification | Failure Mode Taxonomy | Outcome Match |",
+        "| Case ID | Title | Category | Human Baseline (est, m) | Rerun Time (measured, m) | Final Classification | Failure Mode Taxonomy | Outcome Match |",
         "|:---|:---|:---|:---:|:---:|:---|:---|:---:|"
     ]
 
@@ -224,17 +244,24 @@ def write_measured_markdown(file_path: str, results: list, ts: str, human_t: flo
         "",
         "---",
         "",
-        "## 3. Human Ground Truth vs Rerun Autonomous Execution",
+        "## 3. Human Baseline vs Rerun Execution",
         "",
         "```",
-        "Total Human Baseline:   138.5 minutes (2.31 hours)",
-        "Total Rerun Execution:   25.1 minutes (0.42 hours)",
-        "Overall Time Reduction: 81.9% reduction (5.5x speedup)",
+        f"Human baseline (estimated, from the registry):  {human_t:.1f} minutes",
+        f"Rerun execution (measured wall clock):         {rerun_t:.2f} minutes",
         "```",
         "",
-        "- In clean and dependency-migration cases (`real_case_snake`, `real_case_eldr`), Rerun reduced human setup and troubleshooting from 52.5 minutes down to 10.0 minutes.",
-        "- In infeasible control cases (`real_case_faircal`, `real_case_cartoonx`), Rerun triaged the blocks in under 3 minutes total, preventing hours of debugging missing datasets or GPU incompatibilities.",
-        "- In divergent cases (`real_case_fairness_attack`), Rerun reliably reproduced the execution while catching the numerical discrepancy, preventing false positive claims.",
+        "These two figures are NOT comparable and no reduction or speedup is derived from them. "
+        "The human baseline is a published estimate for reproducing the paper's *original* "
+        "repository; the measured time is for the self-contained reimplementation in "
+        "`benchmarks/real/cases/`. A like-for-like comparison would require running the "
+        "upstream repository, which this harness does not do.",
+        "",
+        "- In the infeasible control cases (`real_case_faircal`, `real_case_cartoonx`), triage "
+        "halts before execution, which is the behaviour under test; the time saved against a "
+        "manual attempt is not quantified here.",
+        "- In the divergent case (`real_case_fairness_attack`), the value demonstrated is the "
+        "honest reporting of a numerical discrepancy rather than any time saving.",
         "",
         "---",
         "",
@@ -247,13 +274,14 @@ def write_measured_markdown(file_path: str, results: list, ts: str, human_t: flo
         "",
         "## 5. Traceability and Slide Proof Ledger",
         "",
-        "Every number cited in the presentation slides and completion documentation traces directly to this measured ledger:",
+        "Counts below are produced by this run. Any figure not listed here is not supported by "
+        "this ledger and should not be cited:",
         "- Total Real Cases: **6**",
-        "- Verified Correctly Handled: **6 / 6 (100%)**",
-        "- Clean Reproductions: **3**",
-        "- Genuinely Divergent / Non-Reproduced: **1**",
-        "- Correctly Triaged Out Controls: **2**",
-        "- Average Speedup: **5.5x**",
+        f"- Outcome Classification Matches: **{sum(1 for r in results if r['classification_match'])} / {len(results)}**",
+        f"- Measured Rerun Wall Clock: **{rerun_t:.2f} minutes**",
+        "- Human baseline: **estimated, not measured here**",
+        "- Speedup: **not reported** (see section 3)",
+        "- Execution target: **local reimplementations, not upstream clones**",
         f"- Raw Log Archives: `benchmarks/results/{ts}/`",
         ""
     ])

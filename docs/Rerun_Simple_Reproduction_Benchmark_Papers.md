@@ -23,10 +23,9 @@ The six primary categories are:
 2.  Dependency/environment change --- CPU only
 3.  Small reproduction changes because the original code did not
     directly work --- CPU only
-4.  Reproduction produced incorrect/divergent results --- CPU only
+4.  small reproduction changes because original code produced incorrect/divergent results --- CPU only
 5.  Irreproducible / unable to execute --- CPU only
-6.  One GPU example involving reproduction changes or
-    incorrect/divergent results
+6.  One GPU example involving reproduction changes or incorrect/divergent results
 
 > **Classification note:** The categories below are based on published
 > reproduction reports and repository documentation. Where the published

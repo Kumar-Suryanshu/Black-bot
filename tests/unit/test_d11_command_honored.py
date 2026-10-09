@@ -16,7 +16,7 @@ def test_d11_command_honored_after_claims_confirm(tmp_path, monkeypatch):
     init_db(test_db)
     monkeypatch.setattr("backend.app.routes.get_project_state", lambda db, pid: get_project_state(test_db, pid))
     monkeypatch.setattr("backend.app.routes.save_project_state", lambda db, pid, b, r, p, s: save_project_state(test_db, pid, b, r, p, s))
-    monkeypatch.setattr("backend.app.routes.start_project_worker", lambda pid: None)
+    monkeypatch.setattr("backend.app.routes.start_project_worker", lambda pid, **kw: None)
 
     project_id = "proj_test_d11"
     claim = Claim(

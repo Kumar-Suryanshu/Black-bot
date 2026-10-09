@@ -15,6 +15,11 @@ export interface Claim {
   source_quote: string;
   primary?: boolean;
   confirmed_by_human?: boolean;
+  // False when the claim was supplied by the operator rather than matched verbatim in the
+  // paper. Kept distinct so the report never presents an operator value as paper-verified.
+  quote_verified?: boolean;
+  verified_in_paper?: boolean;
+  selected?: boolean;
 }
 
 export interface PaperSetting {
@@ -66,12 +71,23 @@ export interface PatchEdit {
 export interface Patch {
   id: string;
   hypothesis_id?: string;
+  type?: 'dependency' | 'config_value' | 'path_string' | 'code_typo' | 'code_api_compat';
   risk_class: 'environment_fix' | 'bug_fix' | 'config_alignment' | 'deviation';
   edits: PatchEdit[];
   diff: string;
   rationale: string;
-  evidence_ids: string[];
-  status: 'proposed' | 'applied' | 'rejected' | 'reverted';
+  // Named `evidence` on the backend PatchProposal model. This was `evidence_ids` here, so
+  // evidence chips never rendered on the approval modal.
+  evidence: string[];
+  status: 'proposed' | 'applied' | 'rejected' | 'reverted' | 'dropped' | 'approved';
+  critic_status?: string;
+  policy_result?: {
+    passed: boolean;
+    violations: string[];
+    risk_class: string;
+    flags: string[];
+    requires_extra_confirm: boolean;
+  } | null;
   created_at?: string;
   comment?: string;
 }
@@ -80,7 +96,8 @@ export interface CriticReview {
   id: string;
   patch_id: string;
   round: number;
-  verdict: 'SUPPORTED' | 'OBJECTED' | 'ABSTAIN';
+  // Matches agent.state.CriticReview; the previous 'OBJECTED' | 'ABSTAIN' values never existed.
+  verdict: 'SUPPORTED' | 'NEEDS_REVISION' | 'BLOCK';
   checks: {
     cause_is_cited_and_exists: boolean;
     evidence_actually_supports_cause: boolean;
@@ -95,7 +112,8 @@ export interface CriticReview {
   verified_evidence: Array<{ id: string; what_i_found: string }>;
   objections: string[];
   required_changes: string[];
-  confidence: 'high' | 'med' | 'low';
+  confidence: 'high' | 'medium' | 'low';
+  model?: string;
 }
 
 export interface PendingAction {
@@ -132,6 +150,16 @@ export interface ProjectStateSummary {
   attempts: Attempt[];
   patches: Patch[];
   status?: string;
+  // True as soon as a report exists, so the console can offer it without waiting for the
+  // phase to reach DONE behind an optional LLM enrichment call.
+  report_available?: boolean;
+  preflight?: {
+    blockers: string[];
+    warnings: string[];
+    triage_verdict?: string;
+    triage_reason?: string;
+    gpu_detail?: string;
+  } | null;
   claims?: Claim[];
   paper_settings?: PaperSetting[];
   plan?: Plan | null;
@@ -203,9 +231,29 @@ export interface ReportStatement {
   evidence: string[];
 }
 
+export interface RunComparisonPoint {
+  attempt: string;
+  run_n: number;
+  observed: number | null;
+  reported: number | null;
+  tolerance: number;
+  exit_code: number | null;
+  within_tolerance: boolean | null;
+}
+
+export interface RunsSummary {
+  total_runs: number;
+  unpatched_run: { run: number; exit_code: number | null; metrics: Record<string, any>; within_tolerance: boolean | null } | null;
+  final_run: { run: number; exit_code: number | null; metrics: Record<string, any>; within_tolerance: boolean | null } | null;
+  comparison_chart: RunComparisonPoint[];
+}
+
 export interface ReportData {
   project_id: string;
   benchmark_id: string;
+  // The backend's verified per-attempt comparison. The report UI must render these rather
+  // than deriving its own numbers, which is how a crashed run came to display a pass.
+  runs_summary?: RunsSummary;
   status: 'REPRODUCED' | 'PARTIALLY_REPRODUCED' | 'NOT_REPRODUCED' | 'UNABLE_TO_EXECUTE' | 'INCONCLUSIVE';
   reason: string;
   after_n_fixes: number;

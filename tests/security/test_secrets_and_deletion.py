@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from backend.app.main import app
 from backend.app.db import init_db, save_project_state, get_project_state, insert_evidence, get_connection
 from agent.state import ProjectState, Evidence
+from tools import paths
 
 client = TestClient(app)
 
@@ -21,7 +22,7 @@ def test_secrets_hygiene_in_runs_and_logs():
         re.compile(r"sk-[0-9A-Za-z]{20,}")
     ]
 
-    runs_dir = Path("data/runs")
+    runs_dir = paths.runs_root()
     if not runs_dir.exists():
         return
 
@@ -50,7 +51,7 @@ def test_data_deletion_removes_workspace_and_db(tmp_path):
     init_db("data/rerun.db")
 
     # 1. Create on-disk directory structure
-    proj_dir = Path(f"data/runs/{proj_id}")
+    proj_dir = paths.run_dir(proj_id)
     proj_dir.mkdir(parents=True, exist_ok=True)
     (proj_dir / "workspace").mkdir(exist_ok=True)
     (proj_dir / "workspace" / "train.py").write_text("print('hello')")
@@ -73,7 +74,7 @@ def test_data_deletion_removes_workspace_and_db(tmp_path):
     ev = Evidence(
         id="E-DEL",
         type="log",
-        artifact_path="data/runs/proj_test_deletion/logs/run_1.log",
+        artifact_path=str(paths.logs_dir("proj_test_deletion") / "run_1.log"),
         line_start=1,
         line_end=1,
         sha256="abc",

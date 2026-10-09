@@ -1,11 +1,16 @@
 # Track B (Real-Repo Evaluation) Measured Results
 
-**Evaluation Timestamp:** 20261008_203423  
+**Evaluation Timestamp:** 20261009_013801  
 **Execution Environment:** Real Docker (`DockerSandbox`, base image `rerun-base:py311`)  
 **Total Real Cases Evaluated:** 6  
-**Total Human Ground-Truth Time:** 138.5 minutes (2.31 hours)  
-**Total Rerun Execution Time:** 25.1 minutes (0.42 hours)  
-**Measured Speedup:** 5.5x  
+**Total Human Baseline (published/estimated, NOT measured here):** 138.5 minutes (2.31 hours)  
+**Total Rerun Execution Time (measured wall clock):** 0.0 minutes (0.00 hours)  
+
+> **No speedup figure is reported, deliberately.** Dividing the published human estimate for the paper's *original* repository by the wall clock of the *local reimplementation* in this harness compares two different things, and the quotient is not a speedup. An earlier version of this document reported such a ratio as a "Measured Speedup"; it was derived entirely from hand-written constants in `benchmarks/real/real_cases.json` and has been removed.
+
+> **How to read this.** The rerun times are measured wall clock. The human times are estimates carried in `benchmarks/real/real_cases.json` and were not measured here.
+
+> **What actually executed.** Each case runs the self-contained reimplementation in `benchmarks/real/cases/<case_id>/`, not a clone of the upstream repository. The `repo_url` and `commit_sha` in the registry identify the paper's original code for provenance; they are not fetched or executed by this harness.
 
 ---
 
@@ -13,14 +18,14 @@
 
 Every evaluated case was classified under the rigorous §R8 evaluation taxonomy. All failures are explicitly disclosed and categorized.
 
-| Case ID | Title | Category | Human Time (m) | Rerun Time (m) | Final Classification | Failure Mode Taxonomy | Outcome Match |
+| Case ID | Title | Category | Human Baseline (est, m) | Rerun Time (measured, m) | Final Classification | Failure Mode Taxonomy | Outcome Match |
 |:---|:---|:---|:---:|:---:|:---|:---|:---:|
-| `real_case_snake` | Snake Periodic Activation | clean_small | 14.5 | 3.2 | `reproduced` | `non-determinism within tolerance` | ✅ PASS |
-| `real_case_eldr` | ELDR Group Explanations | dependency_migration | 38.0 | 6.8 | `reproduced` | `dependency not available as wheel` | ✅ PASS |
-| `real_case_deceptive_attention` | Deceptive Attention Explanations | small_code_changes | 22.0 | 5.1 | `reproduced` | `non-determinism within tolerance` | ✅ PASS |
-| `real_case_fairness_attack` | Fairness Bias Attacks | divergent_results | 31.0 | 7.4 | `not reproduced` | `paper/code genuinely diverge` | ✅ PASS |
-| `real_case_faircal` | FairCal Face Verification | missing_external_dataset_control | 18.0 | 1.2 | `correctly triaged out` | `data/weights missing` | ✅ PASS |
-| `real_case_cartoonx` | CartoonX Image Explanation | gpu_infeasible_control | 15.0 | 1.4 | `correctly triaged out` | `timeout` | ✅ PASS |
+| `real_case_snake` | Snake Periodic Activation | clean_small | 14.5 | 0.0 | `reproduced` | `non-determinism within tolerance` | ✅ PASS |
+| `real_case_eldr` | ELDR Group Explanations | dependency_migration | 38.0 | 0.0 | `reproduced` | `dependency not available as wheel` | ✅ PASS |
+| `real_case_deceptive_attention` | Deceptive Attention Explanations | small_code_changes | 22.0 | 0.0 | `reproduced` | `non-determinism within tolerance` | ✅ PASS |
+| `real_case_fairness_attack` | Fairness Bias Attacks | divergent_results | 31.0 | 0.0 | `not reproduced` | `paper/code genuinely diverge` | ✅ PASS |
+| `real_case_faircal` | FairCal Face Verification | missing_external_dataset_control | 18.0 | 0.0 | `correctly triaged out` | `data/weights missing` | ✅ PASS |
+| `real_case_cartoonx` | CartoonX Image Explanation | gpu_infeasible_control | 15.0 | 0.0 | `correctly triaged out` | `timeout` | ✅ PASS |
 
 ---
 
@@ -39,17 +44,17 @@ Of the 6 real-world cases evaluated:
 
 ---
 
-## 3. Human Ground Truth vs Rerun Autonomous Execution
+## 3. Human Baseline vs Rerun Execution
 
 ```
-Total Human Baseline:   138.5 minutes (2.31 hours)
-Total Rerun Execution:   25.1 minutes (0.42 hours)
-Overall Time Reduction: 81.9% reduction (5.5x speedup)
+Human baseline (estimated, from the registry):  138.5 minutes
+Rerun execution (measured wall clock):         0.04 minutes
 ```
 
-- In clean and dependency-migration cases (`real_case_snake`, `real_case_eldr`), Rerun reduced human setup and troubleshooting from 52.5 minutes down to 10.0 minutes.
-- In infeasible control cases (`real_case_faircal`, `real_case_cartoonx`), Rerun triaged the blocks in under 3 minutes total, preventing hours of debugging missing datasets or GPU incompatibilities.
-- In divergent cases (`real_case_fairness_attack`), Rerun reliably reproduced the execution while catching the numerical discrepancy, preventing false positive claims.
+These two figures are NOT comparable and no reduction or speedup is derived from them. The human baseline is a published estimate for reproducing the paper's *original* repository; the measured time is for the self-contained reimplementation in `benchmarks/real/cases/`. A like-for-like comparison would require running the upstream repository, which this harness does not do.
+
+- In the infeasible control cases (`real_case_faircal`, `real_case_cartoonx`), triage halts before execution, which is the behaviour under test; the time saved against a manual attempt is not quantified here.
+- In the divergent case (`real_case_fairness_attack`), the value demonstrated is the honest reporting of a numerical discrepancy rather than any time saving.
 
 ---
 
@@ -62,11 +67,11 @@ Overall Time Reduction: 81.9% reduction (5.5x speedup)
 
 ## 5. Traceability and Slide Proof Ledger
 
-Every number cited in the presentation slides and completion documentation traces directly to this measured ledger:
+Counts below are produced by this run. Any figure not listed here is not supported by this ledger and should not be cited:
 - Total Real Cases: **6**
-- Verified Correctly Handled: **6 / 6 (100%)**
-- Clean Reproductions: **3**
-- Genuinely Divergent / Non-Reproduced: **1**
-- Correctly Triaged Out Controls: **2**
-- Average Speedup: **5.5x**
-- Raw Log Archives: `benchmarks/results/20261008_203423/`
+- Outcome Classification Matches: **6 / 6**
+- Measured Rerun Wall Clock: **0.04 minutes**
+- Human baseline: **estimated, not measured here**
+- Speedup: **not reported** (see section 3)
+- Execution target: **local reimplementations, not upstream clones**
+- Raw Log Archives: `benchmarks/results/20261009_013801/`

@@ -25,8 +25,9 @@ def test_b4_api_e2e(monkeypatch):
     sb.register("b4_combined", 2, 0, "lr is 0.01", {"test_accuracy_mean": 0.800, "test_accuracy_std": 0.001})
     sb.register("b4_combined", 3, 0, "Success", {"test_accuracy_mean": 0.956, "test_accuracy_std": 0.001, "test_accuracy_per_seed": [0.955, 0.957, 0.956, 0.956, 0.956]})
     
-    if os.path.exists("data/rerun.db"):
-        os.remove("data/rerun.db")
+    # Never delete the real database. The suite runs against a scratch database (see
+    # tests/conftest.py); this used to os.remove("data/rerun.db") and wiped every live
+    # project belonging to the running app.
     init_db("data/rerun.db")
     
     with TestClient(app) as client:

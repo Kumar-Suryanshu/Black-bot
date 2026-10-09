@@ -18,6 +18,7 @@ from sandbox.docker_sandbox import DockerSandbox
 from agent.state import ProjectState
 from backend.app.main import app
 from backend.app.db import get_project_state, save_project_state
+from tools import paths
 
 client = TestClient(app)
 
@@ -129,7 +130,7 @@ def test_sdist_only_dependency_triggers_needs_build_without_code_execution(tmp_p
 
 def test_provisioning_log_evidence_and_unapproved_packages_never_downloaded(tmp_path):
     project_id = "proj_prov_evidence_test"
-    run_dir = Path(f"data/runs/{project_id}")
+    run_dir = paths.run_dir(project_id)
     run_dir.mkdir(parents=True, exist_ok=True)
     ws = run_dir / "workspace"
     ws.mkdir(parents=True, exist_ok=True)
@@ -190,7 +191,7 @@ def test_fixture_repo_data_science_stack_installs_and_runs_offline(tmp_path):
     installs and runs offline in real Docker containers.
     """
     project_id = "proj_ds_fixture_offline"
-    run_dir = Path(f"data/runs/{project_id}")
+    run_dir = paths.run_dir(project_id)
     run_dir.mkdir(parents=True, exist_ok=True)
     ws = run_dir / "workspace"
     ws.mkdir(parents=True, exist_ok=True)
@@ -279,7 +280,7 @@ def test_self_test_after_provisioning_confirms_run_container_offline(tmp_path):
     Gate requirement: Self-test after provisioning still shows run container has no network.
     """
     project_id = "proj_selftest_offline"
-    run_dir = Path(f"data/runs/{project_id}")
+    run_dir = paths.run_dir(project_id)
     run_dir.mkdir(parents=True, exist_ok=True)
     ws = run_dir / "workspace"
     ws.mkdir(parents=True, exist_ok=True)

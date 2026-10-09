@@ -129,7 +129,14 @@ def main():
         from scripts.run_case import run_case_headless
         run_case_headless(args.case)
     elif args.command == "api":
-        run_cmd(f"{sys.executable} -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload")
+        # --reload-dir keeps test edits from restarting the API, and the graceful-shutdown
+        # timeout stops an open SSE stream from wedging a reload ("Waiting for connections
+        # to close" forever).
+        run_cmd(
+            f"{sys.executable} -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 "
+            "--reload --reload-dir backend --reload-dir agent --reload-dir tools "
+            "--reload-dir sandbox --timeout-graceful-shutdown 5"
+        )
     elif args.command == "ui":
         run_cmd("npm run dev --prefix frontend")
     else:

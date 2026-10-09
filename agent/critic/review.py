@@ -3,7 +3,9 @@ from pathlib import Path
 
 from agent.state import ProjectState, PatchProposal, CriticReview
 from agent.llm import call as default_llm_call
-from .schemas import CriticPatchReviewOutput
+from tools.evidence import load_evidence_artifact
+from .schemas import CriticJudgement
+from .prompts import CRITIC_PATCH_REVIEW_PROMPT
 
 ALL_CHECKLIST_KEYS = [
     "cause_is_cited_and_exists",
@@ -25,23 +27,26 @@ CRITICAL_CHECKS = [
     "value_has_paper_or_error_provenance"
 ]
 
+def _active_critic_model() -> str:
+    """
+    Identifies the model that actually produced the review, for the record. "unavailable" is
+    reserved for the failure path below and is never supplied by the model itself.
+    """
+    import agent.llm as llm
+    if getattr(llm, "_ACTIVE_FAKE_LLM", None) is not None:
+        return "fake"
+    from agent.config import CRITIC_MODEL
+    return CRITIC_MODEL or "unknown"
+
 def build_review_packet(state: ProjectState, patch: PatchProposal, workspace: Optional[str] = None) -> Dict[str, Any]:
     """Constructs the raw review packet for the Critic."""
     raw_evidence_slices = []
     for eid in patch.evidence:
-        # Look up artifact from state/disk
-        matching_snap = None
-        ev_dir = Path("data") / "runs" / state.project_id / "evidence"
-        if ev_dir.exists():
-            for f in ev_dir.iterdir():
-                if f.name.startswith(f"{eid}_"):
-                    try:
-                        matching_snap = f.read_text(encoding="utf-8", errors="ignore")[:2000]
-                    except Exception:
-                        pass
+        # Resolve through the ledger so the id maps to exactly one artifact.
+        text = load_evidence_artifact(state.project_id, eid)
         raw_evidence_slices.append({
             "id": eid,
-            "raw_text": matching_snap or "(evidence artifact not found on disk)"
+            "raw_text": text[:2000] if text else "(evidence artifact not found on disk)"
         })
 
     hypo_text = ""
@@ -75,14 +80,27 @@ def review_patch(
     """
     call_fn = llm_call_fn or default_llm_call
     packet = build_review_packet(state, patch)
-    
-    # Mode patch_review
-    review_output = None
-    fetches_left = 3
-    
+
     try:
-        review_model = call_fn("critic", "patch_review", packet, CriticReview)
-        review = review_model
+        # The model returns only its judgment; identity and provenance are set here so a
+        # reviewer cannot report its own round number or claim to be "unavailable".
+        judgement = call_fn(
+            "critic", "patch_review", packet, CriticJudgement,
+            task_prompt=CRITIC_PATCH_REVIEW_PROMPT
+        )
+        review = CriticReview(
+            id=f"R-{len(state.critic_reviews) + 1}",
+            patch_id=patch.id,
+            round=round_num,
+            verdict=judgement.verdict,
+            checks=dict(judgement.checks),
+            verified_evidence=list(judgement.verified_evidence),
+            objections=list(judgement.objections),
+            required_changes=list(judgement.required_changes),
+            confidence=judgement.confidence,
+            model=_active_critic_model(),
+        )
+        # An omitted check is a failed check.
         for k in ALL_CHECKLIST_KEYS:
             if k not in review.checks:
                 review.checks[k] = False
@@ -101,23 +119,15 @@ def review_patch(
             model="unavailable"
         )
 
-    # Code-level verification of raw quotes in verified_evidence
-    ev_dir = Path("data") / "runs" / state.project_id / "evidence"
+    # Code-level verification of raw quotes in verified_evidence. The quote must appear in the
+    # one artifact the ledger records for that id, not in any file sharing the id prefix.
     for item in review.verified_evidence:
         eid = item.get("id")
         found_quote = item.get("what_i_found", "")
-        # Check against evidence file
-        matched = False
-        if ev_dir.exists():
-            for f in ev_dir.iterdir():
-                if f.name.startswith(f"{eid}_"):
-                    try:
-                        content = f.read_text(encoding="utf-8", errors="ignore")
-                        if found_quote.strip() in content:
-                            matched = True
-                    except Exception:
-                        pass
-        if not matched and found_quote:
+        if not found_quote:
+            continue
+        content = load_evidence_artifact(state.project_id, eid) or ""
+        if found_quote.strip() not in content:
             # Quote was not actually in the artifact!
             review.checks["evidence_actually_supports_cause"] = False
 

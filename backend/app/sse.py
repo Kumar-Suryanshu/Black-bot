@@ -7,6 +7,11 @@ from agent.events import subscribe, unsubscribe, Event
 from backend.app.db import get_events_since
 
 class StreamManager:
+    # How long to wait for an event before emitting a keep-alive frame. Bounding this is what
+    # lets the response complete, so a server shutdown or reload is never blocked by an idle
+    # dashboard tab.
+    HEARTBEAT_SECONDS = 15.0
+
     def __init__(self):
         # project_id -> list of (queue, loop)
         self.listeners: Dict[str, Set[tuple]] = defaultdict(set)
@@ -21,7 +26,7 @@ class StreamManager:
                 except Exception:
                     pass
 
-    async def event_generator(self, project_id: str, last_event_id: int):
+    async def event_generator(self, project_id: str, last_event_id: int, request=None):
         # 1. Yield caught-up events from DB
         db_events = get_events_since("data/rerun.db", project_id, last_event_id)
         for ev_dict in db_events:
@@ -29,21 +34,41 @@ class StreamManager:
             yield f"id: {last_event_id}\nevent: message\ndata: {json.dumps(ev_dict)}\n\n"
 
         # 2. Live event stream
+        #
+        # The wait is bounded and a heartbeat is emitted on each timeout. An unbounded
+        # `await queue.get()` never returns while a project is idle, so the response never
+        # completes: uvicorn's graceful shutdown then blocks on it forever ("Waiting for
+        # connections to close"), and with --reload any backend edit wedged the whole API
+        # while a dashboard tab was open. The heartbeat also gives the generator a regular
+        # opportunity to notice that the client has gone away.
         queue = asyncio.Queue()
         loop = asyncio.get_event_loop()
         listener_tuple = (queue, loop)
         self.listeners[project_id].add(listener_tuple)
-        
+
         try:
             while True:
-                # Wait for the next event
-                ev: Event = await queue.get()
+                if request is not None:
+                    try:
+                        if await request.is_disconnected():
+                            break
+                    except Exception:
+                        pass
+
+                try:
+                    ev: Event = await asyncio.wait_for(
+                        queue.get(), timeout=self.HEARTBEAT_SECONDS
+                    )
+                except asyncio.TimeoutError:
+                    # SSE comment frame: keeps the connection alive, ignored by EventSource.
+                    yield ": heartbeat\n\n"
+                    continue
+
                 if ev.id > last_event_id:
-                    # serialize
                     ev_dict = ev.model_dump()
                     yield f"id: {ev.id}\nevent: message\ndata: {json.dumps(ev_dict)}\n\n"
                     last_event_id = ev.id
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, GeneratorExit):
             pass
         finally:
             if listener_tuple in self.listeners[project_id]:

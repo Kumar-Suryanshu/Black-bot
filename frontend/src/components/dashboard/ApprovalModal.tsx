@@ -162,11 +162,11 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
         </div>
 
         {/* Evidence Citations */}
-        {patch.evidence_ids && patch.evidence_ids.length > 0 && (
+        {patch.evidence && patch.evidence.length > 0 && (
           <div className="flex items-center gap-2 pt-1">
             <span className="text-[#4A5470] text-xs">Citing Evidence Artifacts:</span>
             <div className="flex flex-wrap gap-1.5">
-              {patch.evidence_ids.map((eid) => (
+              {patch.evidence.map((eid) => (
                 <EvidenceChip key={eid} id={eid} onClick={onSelectEvidence} />
               ))}
             </div>

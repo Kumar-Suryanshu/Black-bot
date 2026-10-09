@@ -59,16 +59,45 @@ def set_event_listener(listener: Optional[Callable[[str, dict], None]]):
     global _EVENT_LISTENER
     _EVENT_LISTENER = listener
 
-def wrap_untrusted(data: any) -> any:
-    """Wraps repo/paper/log text fields in <untrusted> blocks."""
+# Field names whose CONTENT comes from outside the system: paper text, repository files,
+# logs, model-written prose. Only these are fenced as untrusted.
+UNTRUSTED_TEXT_FIELDS = {
+    "paper_text", "observation", "raw_text", "excerpt", "source_quote", "statement",
+    "diff", "rationale", "text", "notes", "reason", "log", "log_excerpt", "found",
+    "what_i_found", "readme", "content", "summary",
+}
+
+# Field names that are identifiers or structure. Fencing these corrupted them: the Solver
+# was shown evidence ids as "<untrusted>\nE-001\n</untrusted>" and echoed them back in that
+# form, so every hypothesis it raised cited an id that did not exist, every hypothesis was
+# rejected, and no patch could ever be proposed. Tool names and claim ids were mangled the
+# same way.
+NEVER_WRAP_FIELDS = {
+    "id", "ids", "evidence", "evidence_ids", "patch_id", "hypothesis_id", "claim_id",
+    "name", "tool", "key", "result_key", "metric", "file", "op", "status", "type",
+    "verdict", "confidence", "section", "kind", "python_image", "command", "config_file",
+    "output_file", "effective_config_file", "seeds", "round", "model", "step",
+}
+
+
+def wrap_untrusted(data: any, _field: str = None) -> any:
+    """
+    Fence externally-sourced TEXT in <untrusted> blocks, leaving identifiers intact.
+
+    A string is fenced only when the field it sits under names external prose. Wrapping
+    everything indiscriminately is what broke evidence citation, because an identifier the
+    Solver must quote back verbatim cannot survive being wrapped in a delimiter.
+    """
     if isinstance(data, str):
+        if _field in NEVER_WRAP_FIELDS or _field not in UNTRUSTED_TEXT_FIELDS:
+            return data
         if "<untrusted>" in data:
             return data
         return f"<untrusted>\n{data}\n</untrusted>"
-    elif isinstance(data, dict):
-        return {k: wrap_untrusted(v) for k, v in data.items()}
-    elif isinstance(data, list):
-        return [wrap_untrusted(item) for item in data]
+    if isinstance(data, dict):
+        return {k: wrap_untrusted(v, _field=k) for k, v in data.items()}
+    if isinstance(data, list):
+        return [wrap_untrusted(item, _field=_field) for item in data]
     return data
 
 def extract_json(text: str) -> dict:
@@ -175,14 +204,24 @@ def call(
     payload: dict,
     out_model: Type[BaseModel],
     benchmark_id: str = "default",
-    max_retries: int = 3
+    max_retries: int = 3,
+    task_prompt: Optional[str] = None
 ) -> BaseModel:
     """
     Main entry point for LLM interactions in Rerun.
     Enforces preambles, untrusted wrapping, JSON validation, re-prompt on invalid JSON,
     cassettes, secret scrubbing, and provider fallback.
+
+    `task_prompt` carries the mode's own instructions (agent/solver/prompts.py,
+    agent/critic/prompts.py). Without it the model received only the role preamble, the JSON
+    schema and "Mode: <name>", leaving it to infer the task from the mode name alone.
+
+    It is appended to the SYSTEM message on purpose: the user message stays byte-identical, so
+    cassette keys (role|mode|payload|model) and the FakeLLM "Mode:" assertion are unaffected.
     """
     system_preamble = SOLVER_PREAMBLE if role == "solver" else CRITIC_PREAMBLE
+    if task_prompt:
+        system_preamble += f"\n\nTask for this call ({mode}):\n{task_prompt.strip()}"
     schema_str = json.dumps(out_model.model_json_schema(), indent=2)
     system_preamble += f"\n\nYou must return a valid JSON object strictly conforming to this JSON Schema:\n{schema_str}"
     user_prompt = f"Mode: {mode}\nPayload:\n{json.dumps(wrap_untrusted(payload), indent=2)}"

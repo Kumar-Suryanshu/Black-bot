@@ -67,7 +67,15 @@ export const NewProject: React.FC = () => {
   const [projectId, setProjectId] = useState<string | null>(null);
   const [claims, setClaims] = useState<Claim[]>([]);
   const [paperSettings, setPaperSettings] = useState<any[]>([]);
-  const [runCommand, setRunCommand] = useState<string>('python train.py --config configs/default.yaml');
+  // Empty by default. This used to be pre-filled with 'python train.py --config
+  // configs/default.yaml', a command invented by the console. For any repository that does
+  // not happen to have that exact layout the server rejected it with
+  // "Target script 'train.py' not found in workspace", and because the error was swallowed
+  // the launch button simply appeared to do nothing.
+  const [runCommand, setRunCommand] = useState<string>('');
+  const [commandCandidates, setCommandCandidates] = useState<string[]>([]);
+  const [extractionIssues, setExtractionIssues] = useState<string[]>([]);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
   const [triageReport, setTriageReport] = useState<any | null>(null);
   const [loadingClaims, setLoadingClaims] = useState<boolean>(false);
   const [submittingConfirm, setSubmittingConfirm] = useState<boolean>(false);
@@ -203,25 +211,19 @@ export const NewProject: React.FC = () => {
         if (draft.claims && draft.claims.length > 0) {
           setClaims(draft.claims);
         } else {
-          setClaims([
-            {
-              id: 'C-1',
-              statement: 'Headline result reported in submitted research paper.',
-              metric: 'test_accuracy',
-              reported: 0.95,
-              tolerance: { type: 'abs', value: 0.01 },
-              result_key: 'test_accuracy_mean',
-              source_ref: 'Abstract / Results',
-              source_quote: 'Accuracy achieved by proposed method',
-              primary: true,
-              confirmed_by_human: true,
-            },
-          ]);
+          // No claim survived verbatim-quote verification against the paper. The console
+          // used to substitute a placeholder claim carrying an invented reported value
+          // (0.95 / 0.956), which the operator could then confirm as if it came from the
+          // paper. Show nothing instead and say why.
+          setClaims([]);
         }
         setPaperSettings(draft.paper_settings || []);
-        if (draft.command) {
-          setRunCommand(draft.command);
-        }
+        const candidates = draft.command_candidates || [];
+        setCommandCandidates(candidates);
+        setExtractionIssues(draft.extraction_issues || []);
+        // Prefer a planned command, else a real candidate discovered in the repository.
+        // Never invent one.
+        setRunCommand(draft.command || candidates[0] || '');
         try {
           const tr = await fetchTriageReport(newProjId);
           setTriageReport(tr);
@@ -262,25 +264,19 @@ export const NewProject: React.FC = () => {
         if (draft.claims && draft.claims.length > 0) {
           setClaims(draft.claims);
         } else {
-          setClaims([
-            {
-              id: 'C-1',
-              statement: 'We achieved a test accuracy of 0.956 ± 0.002 (mean ± std over 5 seeds).',
-              metric: 'test_accuracy',
-              reported: 0.956,
-              tolerance: { type: 'abs', value: 0.01 },
-              result_key: 'test_accuracy_mean',
-              source_ref: 'p.1',
-              source_quote: 'test accuracy of 0.956',
-              primary: true,
-              confirmed_by_human: true,
-            },
-          ]);
+          // No claim survived verbatim-quote verification against the paper. The console
+          // used to substitute a placeholder claim carrying an invented reported value
+          // (0.95 / 0.956), which the operator could then confirm as if it came from the
+          // paper. Show nothing instead and say why.
+          setClaims([]);
         }
         setPaperSettings(draft.paper_settings || []);
-        if (draft.command) {
-          setRunCommand(draft.command);
-        }
+        const candidates = draft.command_candidates || [];
+        setCommandCandidates(candidates);
+        setExtractionIssues(draft.extraction_issues || []);
+        // Prefer a planned command, else a real candidate discovered in the repository.
+        // Never invent one.
+        setRunCommand(draft.command || candidates[0] || '');
         try {
           const tr = await fetchTriageReport(newProjId);
           setTriageReport(tr);
@@ -298,9 +294,91 @@ export const NewProject: React.FC = () => {
     }
   };
 
+  // A triage verdict that reports blockers means the planned command cannot execute in the
+  // sandbox: a notebook-only repository has no runnable script, a repository with missing
+  // local modules or syntax errors cannot import, and a hard GPU requirement cannot be met.
+  // Launching anyway only produces a guaranteed UNABLE_TO_EXECUTE, so the launch is blocked
+  // and the reason is shown. "Triage Only" remains available.
+  const TRIAGE_BLOCKING_VERDICTS = [
+    'UNSUPPORTED_FORMAT',
+    'INCOMPLETE_REPO',
+    'NEEDS_GPU',
+    'NEEDS_LARGE_RESOURCES',
+  ];
+  const triageBlockers: string[] = triageReport?.blockers ?? [];
+  const isTriageBlocked = Boolean(
+    triageReport &&
+      (TRIAGE_BLOCKING_VERDICTS.includes(triageReport.verdict) || triageBlockers.length > 0)
+  );
+  const triageBlockReason: string =
+    triageReport?.reason || (triageBlockers.length ? triageBlockers.join(', ') : '');
+
+  // Adds an operator-supplied claim.
+  //
+  // Extraction only accepts a claim whose quote appears verbatim in the paper, which is the
+  // right rule: it is what stops a hallucinated number being verified. But when every
+  // candidate is rejected there has to be a way forward, otherwise the gate is a dead end.
+  // A claim added here is recorded as operator-supplied, not as verified from the paper, so
+  // the distinction survives into the report.
+  const handleAddClaim = () => {
+    setConfirmError(null);
+    setClaims((prev) => [
+      ...prev,
+      {
+        id: `C-${prev.length + 1}`,
+        statement: '',
+        metric: '',
+        reported: 0,
+        tolerance: { type: 'abs', value: 0.01 },
+        result_key: '',
+        source_ref: 'operator-supplied',
+        source_quote: '',
+        quote_verified: false,
+        verified_in_paper: false,
+        primary: prev.length === 0,
+        selected: true,
+        confirmed_by_human: false,
+      } as Claim,
+    ]);
+  };
+
+  const handleRemoveClaim = (idx: number) => {
+    setClaims((prev) => prev.filter((_, i) => i !== idx));
+  };
+
   // Step 2 Confirm Claims
   const handleConfirmClaims = async () => {
     if (!projectId) return;
+    setConfirmError(null);
+
+    if (isTriageBlocked) {
+      setConfirmError(
+        `Cannot launch: triage reported ${triageReport?.verdict}. ${triageBlockReason}`
+      );
+      return;
+    }
+    if (!runCommand.trim()) {
+      setConfirmError('Enter the command that runs the experiment before launching.');
+      return;
+    }
+    if (claims.length === 0) {
+      setConfirmError(
+        'No claim to verify. Use "Add a claim manually" to enter the metric and the value ' +
+          'the paper reports, or stop at triage.'
+      );
+      return;
+    }
+    const incomplete = claims.find(
+      (c) => !String(c.metric || c.result_key || '').trim() || !Number.isFinite(Number(c.reported))
+    );
+    if (incomplete) {
+      setConfirmError(
+        `Claim ${incomplete.id} is incomplete. Give it a metric key and the numeric value the ` +
+          'paper reports.'
+      );
+      return;
+    }
+
     setSubmittingConfirm(true);
     try {
       const confirmedClaims = claims.map((c) => ({
@@ -309,8 +387,12 @@ export const NewProject: React.FC = () => {
       }));
       await confirmClaims(projectId, confirmedClaims, runCommand, allowHighRisk);
       navigate(`/p/${projectId}`);
-    } catch (err) {
+    } catch (err: any) {
+      // The server's reason must reach the operator. Swallowing it here is why the launch
+      // button looked inert when the command did not exist in the repository.
+      const message = err?.message || 'Failed to confirm claims.';
       console.error('Failed to confirm claims', err);
+      setConfirmError(message);
     } finally {
       setSubmittingConfirm(false);
     }
@@ -822,7 +904,13 @@ export const NewProject: React.FC = () => {
                       <span className="font-bold uppercase tracking-wider text-ink">
                         1. Extracted Paper Claims (Editable):
                       </span>
-                      <span className="text-[11px] text-ink-soft">Review reported value & tolerance</span>
+                      <button
+                        type="button"
+                        onClick={handleAddClaim}
+                        className="px-3 py-1.5 rounded border border-kraft bg-[#FAF7F0] hover:bg-[#E5DFD3] text-[11px] font-bold uppercase tracking-wider text-ink transition-colors"
+                      >
+                        + Add a claim manually
+                      </button>
                     </div>
 
                     <div className="overflow-x-auto bg-[#FFFFFF] rounded-lg border border-kraft shadow-sm">
@@ -834,6 +922,8 @@ export const NewProject: React.FC = () => {
                             <th className="py-2.5 px-4">Metric Key</th>
                             <th className="py-2.5 px-4">Reported Value</th>
                             <th className="py-2.5 px-4">Tolerance</th>
+                            <th className="py-2.5 px-4">Provenance</th>
+                            <th className="py-2.5 px-4"></th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-kraft/50">
@@ -853,7 +943,21 @@ export const NewProject: React.FC = () => {
                                 />
                               </td>
                               <td className="py-3 px-4 font-mono text-xs text-ink-soft">
-                                {c.result_key || 'test_accuracy_mean'}
+                                <input
+                                  type="text"
+                                  value={c.result_key || c.metric || ''}
+                                  placeholder="e.g. test_loss"
+                                  onChange={(e) => {
+                                    const updated = [...claims];
+                                    updated[idx] = {
+                                      ...updated[idx],
+                                      result_key: e.target.value,
+                                      metric: e.target.value,
+                                    };
+                                    setClaims(updated);
+                                  }}
+                                  className="w-36 bg-[#F4F1E8] border border-kraft rounded px-2 py-1 text-xs text-ink focus:outline-none focus:border-rust"
+                                />
                               </td>
                               <td className="py-3 px-4">
                                 <input
@@ -869,9 +973,55 @@ export const NewProject: React.FC = () => {
                                 />
                               </td>
                               <td className="py-3 px-4">
-                                <span className="font-mono text-xs text-ink font-semibold">
-                                  ± {c.tolerance?.value ?? 0.01} ({c.tolerance?.type ?? 'abs'})
-                                </span>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-mono text-xs text-ink">±</span>
+                                  <input
+                                    type="number"
+                                    step="0.001"
+                                    value={c.tolerance?.value ?? 0.01}
+                                    onChange={(e) => {
+                                      const updated = [...claims];
+                                      updated[idx] = {
+                                        ...updated[idx],
+                                        tolerance: {
+                                          type: updated[idx].tolerance?.type ?? 'abs',
+                                          value: parseFloat(e.target.value),
+                                        },
+                                      };
+                                      setClaims(updated);
+                                    }}
+                                    className="w-20 bg-[#F4F1E8] border border-kraft rounded px-2 py-1 font-mono text-xs text-ink focus:outline-none focus:border-rust"
+                                  />
+                                  <span className="text-[10px] text-ink-soft">
+                                    {c.tolerance?.type ?? 'abs'}
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="py-3 px-4">
+                                {c.quote_verified === false ? (
+                                  <span
+                                    className="text-[10px] font-bold uppercase tracking-wider text-amber-800"
+                                    title="Supplied by the operator; not verified against the paper text"
+                                  >
+                                    operator
+                                  </span>
+                                ) : (
+                                  <span
+                                    className="text-[10px] font-bold uppercase tracking-wider text-emerald-700"
+                                    title="Quote found verbatim in the paper"
+                                  >
+                                    verified
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3 px-4">
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveClaim(idx)}
+                                  className="text-[11px] text-fail hover:underline"
+                                >
+                                  remove
+                                </button>
                               </td>
                             </tr>
                           ))}
@@ -934,6 +1084,83 @@ export const NewProject: React.FC = () => {
                     />
                   </div>
 
+                  {/* Command candidates discovered in the repository */}
+                  {commandCandidates.length > 0 && (
+                    <div className="space-y-2">
+                      <span className="text-[11px] text-[#4A5470] uppercase tracking-wider font-semibold">
+                        Commands found in this repository (click to use):
+                      </span>
+                      <div className="flex flex-wrap gap-2">
+                        {commandCandidates.map((cmd) => (
+                          <button
+                            key={cmd}
+                            type="button"
+                            onClick={() => setRunCommand(cmd)}
+                            className={`px-2.5 py-1.5 rounded border font-mono text-[11px] transition-colors ${
+                              runCommand === cmd
+                                ? 'bg-amber-100 border-amber-400 text-amber-900 font-bold'
+                                : 'bg-[#FAF7F0] border-[#CDC5B4] text-[#1F2A44] hover:bg-[#E5DFD3]'
+                            }`}
+                          >
+                            {cmd}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* No claim could be verified against the paper */}
+                  {claims.length === 0 && (
+                    <div className="p-4 rounded-lg bg-amber-50 border-2 border-amber-300 text-amber-900 font-mono text-xs space-y-1.5">
+                      <div className="font-bold uppercase tracking-wider">
+                        No claim could be verified against the paper
+                      </div>
+                      {extractionIssues.length > 0 ? (
+                        <ul className="list-disc list-inside space-y-0.5">
+                          {extractionIssues.map((issue, i) => (
+                            <li key={i}>{issue}</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p>Claim extraction returned nothing for this paper.</p>
+                      )}
+                      <p className="text-[11px]">
+                        A claim is only accepted when its quote appears verbatim in the paper
+                        text, which is what stops an invented number being treated as verified.
+                        Nothing has been substituted here. Use{' '}
+                        <strong>“+ Add a claim manually”</strong> in the claims table below to
+                        enter the metric and the value the paper reports, or stop at triage.
+                        A claim you add is recorded as operator-supplied, not as verified from
+                        the paper.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Confirm error from the server */}
+                  {confirmError && (
+                    <div className="p-4 rounded-lg bg-red-50 border-2 border-red-300 text-red-900 font-mono text-xs">
+                      <span className="font-bold uppercase tracking-wider block mb-1">
+                        Launch rejected
+                      </span>
+                      {confirmError}
+                    </div>
+                  )}
+
+                  {/* Triage block notice */}
+                  {isTriageBlocked && (
+                    <div className="p-4 rounded-lg bg-red-50 border-2 border-red-300 text-red-900 font-mono text-xs space-y-1.5">
+                      <div className="font-bold uppercase tracking-wider">
+                        Execution blocked: {triageReport?.verdict}
+                      </div>
+                      <p className="leading-relaxed">{triageBlockReason}</p>
+                      <p className="text-[11px] text-red-800">
+                        This repository cannot be executed in the sandbox, so launching would
+                        only produce an UNABLE_TO_EXECUTE verdict. Use “Triage Only” to keep
+                        the feasibility report.
+                      </p>
+                    </div>
+                  )}
+
                   {/* Actions Bar */}
                   <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-6 border-t border-kraft/60">
                     <button
@@ -958,14 +1185,25 @@ export const NewProject: React.FC = () => {
                       <button
                         type="button"
                         onClick={handleConfirmClaims}
-                        disabled={submittingConfirm}
-                        className="w-full sm:w-auto flex items-center justify-center gap-2 px-8 py-3.5 rounded-sm bg-rust hover:bg-[#A34B26] text-[#FAF7F0] font-bold text-xs uppercase tracking-[0.2em] border border-l-4 border-l-[#7A3317] shadow-xl transition-all disabled:opacity-50"
+                        disabled={submittingConfirm || isTriageBlocked}
+                        title={
+                          isTriageBlocked
+                            ? `Blocked by triage: ${triageReport?.verdict}. ${triageBlockReason}`
+                            : undefined
+                        }
+                        className="w-full sm:w-auto flex items-center justify-center gap-2 px-8 py-3.5 rounded-sm bg-rust hover:bg-[#A34B26] text-[#FAF7F0] font-bold text-xs uppercase tracking-[0.2em] border border-l-4 border-l-[#7A3317] shadow-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-rust"
                         style={{
                           clipPath: 'polygon(0% 2px, 2px 0%, calc(100% - 2px) 0%, 100% 2px, 100% calc(100% - 2px), calc(100% - 2px) 100%, 2px 100%, 0% calc(100% - 2px))',
                         }}
                       >
                         <Send className="w-4 h-4 text-[#FAF7F0]" />
-                        <span>{submittingConfirm ? 'Confirming...' : 'Confirm Claims & Launch Run →'}</span>
+                        <span>
+                          {isTriageBlocked
+                            ? 'Launch Blocked by Triage'
+                            : submittingConfirm
+                            ? 'Confirming...'
+                            : 'Confirm Claims & Launch Run →'}
+                        </span>
                       </button>
                     </div>
                   </div>

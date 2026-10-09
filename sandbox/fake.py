@@ -5,6 +5,7 @@ from typing import Optional, Dict, Tuple
 from pathlib import Path
 
 from .manager import RunResult
+from tools import paths
 
 class FakeSandbox:
     """Mock sandbox implementation for testing state transitions and canned scenarios."""
@@ -45,7 +46,7 @@ class FakeSandbox:
 
         # Also write to data/runs/<id>/logs if state has project_id
         project_id = getattr(state, "project_id", "test_proj")
-        data_log_dir = Path("data") / "runs" / project_id / "logs"
+        data_log_dir = paths.logs_dir(project_id)
         data_log_dir.mkdir(parents=True, exist_ok=True)
         (data_log_dir / f"{kind}_{n}.log").write_text(logs, encoding="utf-8")
 
@@ -54,7 +55,7 @@ class FakeSandbox:
         res_file = out_dir / "results.json"
         res_file.write_text(json.dumps(outputs), encoding="utf-8")
 
-        dest_output_dir = Path("data") / "runs" / project_id / "outputs" / f"run_{n}"
+        dest_output_dir = paths.run_dir(project_id) / "outputs" / f"run_{n}"
         dest_output_dir.mkdir(parents=True, exist_ok=True)
         (dest_output_dir / "results.json").write_text(json.dumps(outputs), encoding="utf-8")
 
@@ -69,7 +70,7 @@ class FakeSandbox:
 
     def install(self, state, workspace: str, n: int = 1) -> Tuple[int, str, RunResult]:
         project_id = getattr(state, "project_id", "test_proj")
-        log_dir = Path("data") / "runs" / project_id / "logs"
+        log_dir = paths.logs_dir(project_id)
         log_dir.mkdir(parents=True, exist_ok=True)
         log_file = log_dir / f"setup_{n}.log"
         log_file.write_text("Setup install succeeded (fake)", encoding="utf-8")
@@ -94,13 +95,13 @@ class FakeSandbox:
             "n": n
         })
         
-        log_dir = Path("data") / "runs" / project_id / "logs"
+        log_dir = paths.logs_dir(project_id)
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / f"{kind}_{n}.log"
         with open(log_path, "w") as f:
             f.write(self.output_text if self.output_text else "Execution completed successfully")
             
-        dest_output_dir = Path("data") / "runs" / project_id / "outputs" / f"run_{n}"
+        dest_output_dir = paths.run_dir(project_id) / "outputs" / f"run_{n}"
         dest_output_dir.mkdir(parents=True, exist_ok=True)
         
         return RunResult(

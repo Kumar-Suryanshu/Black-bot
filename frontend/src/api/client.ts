@@ -89,6 +89,8 @@ export async function fetchClaimsDraft(projectId: string): Promise<{
   claims: Claim[];
   paper_settings: any[];
   command: string | null;
+  command_candidates: string[];
+  extraction_issues: string[];
 }> {
   const res = await fetch(`${BASE_URL}/api/projects/${projectId}/claims-draft`);
   if (!res.ok) throw new Error(`Failed to fetch claims draft: ${res.statusText}`);
@@ -118,7 +120,9 @@ export async function rejectClaims(projectId: string): Promise<void> {
 
 export async function fetchPendingApproval(projectId: string): Promise<{
   approval_id: string;
+  project_id: string;
   patch: Patch;
+  reviews: CriticReview[];
   critic_review: CriticReview | null;
   banner: string | null;
   requires_extra_confirm: boolean;
@@ -129,16 +133,19 @@ export async function fetchPendingApproval(projectId: string): Promise<{
 }
 
 export async function submitApproval(
+  projectId: string,
   approvalId: string,
   decision: 'approve' | 'reject' | 'edit',
   confirmExtra: boolean = false,
   comment: string = '',
   edits?: any[]
 ): Promise<any> {
-  const res = await fetch(`${BASE_URL}/api/approvals/${approvalId}`, {
+  // Project-scoped: approval ids are only unique within a project, so posting to the
+  // unscoped /api/approvals/{id} could apply the decision to a different project.
+  const res = await fetch(`${BASE_URL}/api/projects/${projectId}/approvals/${approvalId}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ decision, confirm_extra: confirmExtra, comment, edits }),
+    body: JSON.stringify({ decision, confirm_extra: confirmExtra, comment, edits, project_id: projectId }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
@@ -182,6 +189,17 @@ export async function approveProvisioning(projectId: string, packages?: string[]
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail || `Failed to approve provisioning: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function rejectProvisioning(projectId: string): Promise<any> {
+  const res = await fetch(`${BASE_URL}/api/projects/${projectId}/provisioning/reject`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `Failed to reject provisioning: ${res.statusText}`);
   }
   return res.json();
 }

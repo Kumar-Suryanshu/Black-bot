@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from .limits import get_limits
+from tools import paths
 
 @dataclass
 class RunResult:
@@ -101,7 +102,7 @@ def probe_gpu() -> dict:
 def build_container_spec(project_id: str, workspace: Path, is_setup: bool, command: str, python_image: str = "rerun-base:py311") -> dict:
     limits = get_limits()
     wheelhouse = Path("wheelhouse").absolute()
-    project_whl = Path(f"data/runs/{project_id}/wheelhouse").absolute()
+    project_whl = paths.wheelhouse_dir(project_id).absolute()
     
     spec = dict(
         image=python_image,
@@ -135,6 +136,16 @@ def build_container_spec(project_id: str, workspace: Path, is_setup: bool, comma
     )
     
     if is_setup:
+        # pip unpacks wheels into TMPDIR before installing. /tmp is a RAM-backed tmpfs
+        # bounded by the container memory limit, so a large wheel such as torch (811 MB
+        # installed, and roughly that again while unpacking) exhausted it and the install
+        # died with "No space left on device" even with ample disk free. Give the installer
+        # a disk-backed scratch directory outside the repository workspace instead.
+        pip_tmp = (paths.run_dir(project_id) / "pip_tmp").absolute()
+        pip_tmp.mkdir(parents=True, exist_ok=True)
+        spec["volumes"][str(pip_tmp)] = {"bind": "/pip_tmp", "mode": "rw"}
+        spec["environment"]["TMPDIR"] = "/pip_tmp"
+
         spec["volumes"][str(wheelhouse)] = {"bind": "/wheelhouse", "mode": "ro"}
         find_links = ["--find-links", "/wheelhouse"]
         if project_whl.exists():
@@ -163,41 +174,101 @@ def build_container_spec(project_id: str, workspace: Path, is_setup: bool, comma
             
     return spec
 
+def _make_tree_group_writable(root: Path) -> None:
+    """
+    Grants read/write (and traverse, for directories) to the whole tree so the container's
+    uid 1000 can use the bind mount. Pure os.chmod over a walk: no shell, so paths containing
+    spaces or shell metacharacters are handled correctly.
+    """
+    import stat
+
+    file_bits = stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IWGRP | stat.S_IROTH | stat.S_IWOTH
+    dir_bits = file_bits | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+
+    try:
+        os.chmod(root, dir_bits)
+    except Exception:
+        pass
+    for dirpath, dirnames, filenames in os.walk(root):
+        for name in dirnames:
+            try:
+                os.chmod(os.path.join(dirpath, name), dir_bits)
+            except Exception:
+                pass
+        for name in filenames:
+            try:
+                target = os.path.join(dirpath, name)
+                # Preserve the executable bit where it is already set (entry-point scripts).
+                current = os.stat(target).st_mode
+                bits = file_bits
+                if current & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH):
+                    bits |= stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+                os.chmod(target, bits)
+            except Exception:
+                pass
+
+def _safe_remove(container) -> None:
+    """
+    Remove a container, tolerating the removal already being under way.
+
+    Docker removes containers asynchronously, so a force-remove can collide with a removal
+    already in progress and answer 409 Conflict. That exception propagated out of the
+    sandbox and aborted the whole reproduction with "internal error", discarding a run that
+    had actually completed.
+    """
+    for _ in range(3):
+        try:
+            container.remove(force=True)
+            return
+        except docker.errors.NotFound:
+            return
+        except docker.errors.APIError as e:
+            message = str(e).lower()
+            if "already in progress" in message or "is being removed" in message:
+                time.sleep(0.5)
+                continue
+            return
+        except Exception:
+            return
+
+
+def _remove_container_by_name(client, name: str, timeout_s: float = 10.0) -> None:
+    """Free a container name before reusing it, waiting for any in-flight removal."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            existing = client.containers.get(name)
+        except docker.errors.NotFound:
+            return
+        except Exception:
+            return
+        _safe_remove(existing)
+        time.sleep(0.3)
+
+
 def run_container(project_id: str, workspace: Path, is_setup: bool, command: str, kind: str, n: int, python_image: str = "rerun-base:py311", run_timeout_override: Optional[int] = None) -> RunResult:
     limits = get_limits()
     client = docker.from_env()
     
-    # 1. Create workspace output dir and log file
-    # Note: On Windows (Docker Desktop), permissions are mostly inherited. The prompt advises a+rwX,
-    # which we can attempt naively for standard POSIX if running on WSL/Linux, but Windows won't mind it missing.
-    try:
-        if sys.platform != "win32":
-            os.system(f"chmod -R a+rwX {workspace.absolute()}")
-    except Exception:
-        pass
-        
+    # 1. Create workspace output dir and log file.
+    # The container runs as uid 1000, so the bind-mounted workspace must be writable by it.
+    # This used to shell out via os.system with an interpolated, unquoted path, which breaks
+    # on any path containing a space and passes the path through a shell for no reason.
     outputs_dir = workspace / "outputs"
     outputs_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        if sys.platform != "win32":
-            os.system(f"chmod -R a+rwX {outputs_dir.absolute()}")
-    except Exception:
-        pass
+    if sys.platform != "win32":
+        _make_tree_group_writable(workspace)
 
-    log_dir = Path("data") / "runs" / project_id / "logs"
+    log_dir = paths.logs_dir(project_id)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"{kind}_{n}.log"
 
     # 2. Build spec and run
     spec = build_container_spec(project_id, workspace, is_setup, command, python_image=python_image)
     container_name = f"rerun_{project_id}_{kind}_{n}"
-    try:
-        existing = client.containers.get(container_name)
-        existing.remove(force=True)
-    except Exception:
-        pass
+    _remove_container_by_name(client, container_name)
     spec["name"] = container_name
-    
+
     container = client.containers.run(**spec)
     with _ACTIVE_CONTAINERS_LOCK:
         _ACTIVE_CONTAINERS[project_id] = container.id
@@ -248,7 +319,7 @@ def run_container(project_id: str, workspace: Path, is_setup: bool, command: str
         oom = False
         
     # Harvest outputs
-    dest_output_dir = Path("data") / "runs" / project_id / "outputs" / f"run_{n}"
+    dest_output_dir = paths.run_dir(project_id) / "outputs" / f"run_{n}"
     dest_output_dir.mkdir(parents=True, exist_ok=True)
     # Simple copy over if anything was written
     if outputs_dir.exists():
@@ -260,13 +331,9 @@ def run_container(project_id: str, workspace: Path, is_setup: bool, command: str
                 shutil.copytree(item, dest_output_dir / item.name, dirs_exist_ok=True)
                 
     # 5. Remove container
-    try:
-        container.remove(force=True)
-    except docker.errors.NotFound:
-        pass
-    finally:
-        with _ACTIVE_CONTAINERS_LOCK:
-            _ACTIVE_CONTAINERS.pop(project_id, None)
+    _safe_remove(container)
+    with _ACTIVE_CONTAINERS_LOCK:
+        _ACTIVE_CONTAINERS.pop(project_id, None)
         
     return RunResult(
         exit_code=exit_code,

@@ -13,14 +13,31 @@ class FakeLLM:
     def respond(self, messages: List[Dict[str, str]]) -> str:
         if not self.script:
             raise RuntimeError("FakeLLM script exhausted: no more responses configured.")
-            
-        expected_role, expected_mode, canned_resp = self.script.pop(0)
+
         user_msg = messages[-1]["content"]
-        
-        # Verify mode in user prompt
-        assert f"Mode: {expected_mode}" in user_msg or "Your response was invalid" in user_msg, (
-            f"FakeLLM expected mode '{expected_mode}', but user prompt was: {user_msg[:120]}"
-        )
+
+        # Match the next response by MODE rather than strictly by position.
+        #
+        # Positional matching coupled every script to one exact sequence of model calls, so
+        # any change to the orchestration (for instance deriving a mechanical fix in code
+        # and skipping diagnose_step) handed the wrong canned reply to the next caller and
+        # failed with a confusing assertion. Matching by mode keeps every existing script
+        # valid while tolerating calls that no longer happen.
+        index = 0
+        if "Your response was invalid" not in user_msg:
+            index = next(
+                (i for i, (_r, mode, _resp) in enumerate(self.script)
+                 if f"Mode: {mode}" in user_msg),
+                -1,
+            )
+            if index == -1:
+                requested = user_msg.split("\n", 1)[0]
+                raise AssertionError(
+                    f"FakeLLM has no scripted response for {requested!r}. "
+                    f"Remaining modes: {[m for _r, m, _x in self.script]}"
+                )
+
+        expected_role, expected_mode, canned_resp = self.script.pop(index)
         
         self.history.append({
             "expected_role": expected_role,
@@ -184,7 +201,16 @@ def get_fake_script_b2() -> list:
 
 
 def get_fake_script_b3() -> list:
-    """Script for B3 Silent Config Case: bad learning rate."""
+    """
+    Script for B3 Silent Config Case: bad learning rate.
+
+    Evidence ids matter here. Run 1 exits 0 with a low metric, so VALIDATE records the metric
+    source (outputs/results.json) as E-001 before DIAGNOSE inspects configs/default.yaml and
+    records it as E-002. Citing E-001 for the config quote therefore fails the Critic's
+    verbatim-quote check and the correct patch is rejected. b4's script already accounts for
+    this; b3's did not, which only showed up in a real container run because FakeSandbox
+    always exits 0 and never reaches this path.
+    """
     return [
         # 1. extract_claims
         ("solver", "extract_claims", {
@@ -232,7 +258,7 @@ def get_fake_script_b3() -> list:
                 "id": "H-1",
                 "text": "Learning rate mismatch",
                 "status": "confirmed",
-                "evidence": ["E-001"],
+                "evidence": ["E-002"],
                 "tested_with": ["inspect_file"],
                 "error_class": "config_mismatch"
             }],
@@ -246,7 +272,7 @@ def get_fake_script_b3() -> list:
             "hypothesis_id": "H-1",
             "type": "config_value",
             "rationale": "Paper specifies lr=0.5 but config uses 0.01",
-            "evidence": ["E-001"],
+            "evidence": ["E-002"],
             "alternatives_considered": [],
             "edits": [{
                 "file": "configs/default.yaml",
@@ -272,7 +298,7 @@ def get_fake_script_b3() -> list:
                 "alternative_explanations_considered": True,
                 "reversible_and_smoke_testable": True
             },
-            "verified_evidence": [{"id": "E-001", "what_i_found": "learning_rate: 0.01"}],
+            "verified_evidence": [{"id": "E-002", "what_i_found": "learning_rate: 0.01"}],
             "objections": [],
             "required_changes": [],
             "confidence": "high",
@@ -287,7 +313,7 @@ def get_fake_script_b3() -> list:
                     "kind": "finding",
                     "confidence": "confirmed",
                     "text": "Reproduction succeeded after applying 1 config patch.",
-                    "evidence": ["E-001"]
+                    "evidence": ["E-002"]
                 }
             ]
         })

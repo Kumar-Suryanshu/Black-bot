@@ -7,7 +7,8 @@ Phase  = Literal["INGEST","ANALYZE","CLAIMS_CONFIRM","PLAN","PREFLIGHT","SETUP",
                  "APPROVAL","PATCH_APPLY","STATUS","REPORT","REPORT_REVIEW","DONE"]
 ErrorClass = Literal["dependency_missing","dependency_conflict","path_error","gpu_required","network_required",
                      "resource_oom","resource_timeout","sandbox_permission","config_error","numerical_invalid",
-                     "config_mismatch","python_version_mismatch","api_deprecation","dataset_missing","device_unavailable","unknown"]
+                     "config_mismatch","python_version_mismatch","api_deprecation","dataset_missing","device_unavailable",
+                     "metric_extraction_failed","unknown"]
 RiskClass = Literal["environment_fix","bug_fix","config_alignment","deviation"]
 
 class Tolerance(BaseModel):
@@ -180,6 +181,12 @@ class ProjectState(BaseModel):
     provisioning_approved: bool = False
     pending: dict | None = None
     final: dict | None = None
+    # Tool calls the orchestrator refused, with the reason. Fed back to the Solver so it can
+    # change course instead of proposing the same refused action every step.
+    rejected_actions: list[dict] = Field(default_factory=list)
+    # What each diagnostic tool call actually found. Fed back to the Solver so it does not
+    # repeat a call whose answer it already has.
+    diagnostic_findings: list[dict] = Field(default_factory=list)
     llm_call_metadata: list[dict] = Field(default_factory=list)
 
 class Event(BaseModel):

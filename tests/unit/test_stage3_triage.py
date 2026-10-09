@@ -7,6 +7,7 @@ from tools.triage import triage_report
 from backend.app.main import app
 from backend.app.db import init_db, save_project_state, get_project_state
 from agent.state import ProjectState
+from tools import paths
 
 def test_triage_clean_repo(tmp_path):
     """Clean repo with valid Python code and standard library should be FEASIBLE."""
@@ -179,7 +180,7 @@ def test_triage_api_endpoint(tmp_path, monkeypatch):
     monkeypatch.setattr("backend.app.routes.save_project_state", lambda db, pid, b, r, p, s: save_project_state(test_db, pid, b, r, p, s))
 
     # Create dummy project workspace
-    ws = Path("data/runs/proj_triage_test/workspace")
+    ws = paths.workspace_dir("proj_triage_test")
     ws.mkdir(parents=True, exist_ok=True)
     (ws / "main.py").write_text("import math\nprint(math.pi)\n")
 
@@ -205,5 +206,92 @@ def test_triage_api_endpoint(tmp_path, monkeypatch):
         assert "imports" in data
     finally:
         import shutil
-        if Path("data/runs/proj_triage_test").exists():
-            shutil.rmtree("data/runs/proj_triage_test")
+        if paths.run_dir("proj_triage_test").exists():
+            shutil.rmtree(paths.run_dir("proj_triage_test"))
+
+
+# ---------------------------------------------------------------------------
+# Stub severity and finding masking (regression)
+#
+# Any single `pass` body used to make a whole repository INCOMPLETE_REPO, which blocked
+# essentially every real-world research repo at preflight. Because the verdict ladder was a
+# chain of elif, it also discarded genuine GPU and missing-data findings underneath.
+# ---------------------------------------------------------------------------
+
+def _write_realistic_repo(root):
+    root.mkdir()
+    (root / "requirements.txt").write_text("numpy==1.26.4\ntorch==2.1.0\n")
+    (root / "model.py").write_text(
+        "import torch\n"
+        "import torch.nn as nn\n"
+        "\n"
+        "class Net(nn.Module):\n"
+        "    def __init__(self):\n"
+        "        super().__init__()\n"
+        "        self.fc = nn.Linear(10, 2)\n"
+        "\n"
+        "    def forward(self, x):\n"
+        "        return self.fc(x)\n"
+        "\n"
+        "class BaseTrainer:\n"
+        "    def on_epoch_end(self):\n"
+        "        pass  # hook for subclasses\n"
+    )
+    (root / "train.py").write_text(
+        "import torch\n"
+        "from model import Net\n"
+        "\n"
+        "def main():\n"
+        "    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n"
+        "    net = Net().to(device)\n"
+        "    print('accuracy: 0.91')\n"
+        "\n"
+        "if __name__ == '__main__':\n"
+        "    main()\n"
+    )
+    return root
+
+
+def test_single_no_op_hook_does_not_block_a_real_repository(tmp_path):
+    """One idiomatic `pass` hook is a warning, not a blocker."""
+    repo = _write_realistic_repo(tmp_path / "realistic_repo")
+
+    report = triage_report(str(repo))
+    assert report["verdict"] != "INCOMPLETE_REPO"
+    assert "unimplemented_stubs" not in report["blockers"]
+    # Still reported, just not as a blocker.
+    assert any("empty function" in w for w in report["warnings"])
+    assert any(s["type"] == "pass_stub" for s in report["stubs"])
+
+
+def test_not_implemented_error_still_blocks_in_a_real_repository(tmp_path):
+    """An explicit NotImplementedError is an author saying the code path is absent."""
+    repo = _write_realistic_repo(tmp_path / "ni_repo")
+    (repo / "evaluate.py").write_text(
+        "def evaluate(model):\n"
+        "    raise NotImplementedError('fill this in')\n"
+    )
+
+    report = triage_report(str(repo))
+    assert report["verdict"] == "INCOMPLETE_REPO"
+    assert "unimplemented_stubs" in report["blockers"]
+
+
+def test_lower_priority_findings_are_not_masked_by_higher_priority_ones(tmp_path):
+    """
+    A repo with both a syntax error and a hard GPU requirement must report both blockers.
+    The old elif ladder returned only the first and silently dropped the rest.
+    """
+    repo = tmp_path / "multi_fault_repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("flash-attn==2.5.0\n")
+    (repo / "broken.py").write_text("def f(:\n    pass\n")
+    (repo / "train.py").write_text("import flash_attn\ndevice = 'cuda'\n")
+
+    report = triage_report(str(repo))
+    assert "syntax_error" in report["blockers"]
+    assert "gpu_required" in report["blockers"], (
+        f"GPU finding was masked; blockers={report['blockers']}"
+    )
+    # Headline verdict still follows documented priority.
+    assert report["verdict"] == "INCOMPLETE_REPO"

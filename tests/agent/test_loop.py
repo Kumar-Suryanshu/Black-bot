@@ -4,6 +4,7 @@ from pathlib import Path
 
 from agent.state import ProjectState, Claim, Approval
 from agent.loop import run_project, set_sandbox, FakeSandbox
+from tools import paths
 
 def test_b1_control_loop(tmp_path, monkeypatch):
     import agent.llm
@@ -107,7 +108,7 @@ def test_b2_dependency_loop(tmp_path, monkeypatch):
     )
     
     # Create mock evidence file for the critic check
-    ev_dir = Path("data") / "runs" / "test_b2" / "evidence"
+    ev_dir = paths.run_dir("test_b2") / "evidence"
     ev_dir.mkdir(parents=True, exist_ok=True)
     (ev_dir / "E-001_log.txt").write_text("ModuleNotFoundError: No module named 'yaml'\n")
     

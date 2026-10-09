@@ -112,17 +112,15 @@ def verify_report_claims(
     current_status = state.final.get("status") if state.final else state.phase
     confirmed_hypo_ids = {h.id for h in state.hypotheses if h.status == "confirmed"}
 
-    # Pre-cache evidence text from disks
+    # Pre-cache evidence text, resolved through the ledger so each id maps to exactly one
+    # artifact rather than to any snapshot sharing its filename prefix.
+    from tools.evidence import load_evidence_artifact
+
     evidence_texts: Dict[str, str] = {}
-    ev_dir = Path("data") / "runs" / state.project_id / "evidence"
-    if ev_dir.exists():
-        for f in ev_dir.iterdir():
-            for eid in state.evidence_ids:
-                if f.name.startswith(f"{eid}_"):
-                    try:
-                        evidence_texts[eid] = f.read_text(encoding="utf-8", errors="ignore")
-                    except Exception:
-                        pass
+    for eid in state.evidence_ids:
+        text = load_evidence_artifact(state.project_id, eid)
+        if text is not None:
+            evidence_texts[eid] = text
 
     for stmt in statements:
         violations: List[str] = []
@@ -234,26 +232,26 @@ def generate_report(
         target_val = primary_claim.reported if primary_claim else None
         target_tol = primary_claim.tolerance.value if primary_claim else 0.01
 
+        # `within_tolerance` is None when the attempt produced no comparison at all. It used
+        # to default to False, which reads as "measured and outside tolerance" rather than
+        # "never measured" -- a crashed run must not be reported as a measured miss.
+        def _within(att):
+            if att.comparison and len(att.comparison) > 0:
+                return att.comparison[0].get("within_tolerance")
+            return None
+
         runs_summary["unpatched_run"] = {
             "run": first_att.n,
             "exit_code": first_att.exit_code,
             "metrics": first_att.metrics or {},
-            "within_tolerance": (
-                first_att.comparison[0].get("within_tolerance")
-                if first_att.comparison and len(first_att.comparison) > 0
-                else False
-            )
+            "within_tolerance": _within(first_att)
         }
 
         runs_summary["final_run"] = {
             "run": final_att.n,
             "exit_code": final_att.exit_code,
             "metrics": final_att.metrics or {},
-            "within_tolerance": (
-                final_att.comparison[0].get("within_tolerance")
-                if final_att.comparison and len(final_att.comparison) > 0
-                else False
-            )
+            "within_tolerance": _within(final_att)
         }
 
         # Build chart data points for frontend recharts
@@ -275,11 +273,7 @@ def generate_report(
                 "reported": target_val,
                 "tolerance": target_tol,
                 "exit_code": att.exit_code,
-                "within_tolerance": (
-                    att.comparison[0].get("within_tolerance")
-                    if att.comparison and len(att.comparison) > 0
-                    else False
-                )
+                "within_tolerance": _within(att)
             })
 
     # 2. Group verified statements by section
@@ -400,7 +394,8 @@ def generate_report(
         for r in runs_summary["comparison_chart"]:
             obs_str = f"{r['observed']:.4f}" if r['observed'] is not None else "N/A (crashed)"
             tgt_str = f"{r['reported']:.4f}" if r['reported'] is not None else "N/A"
-            md_lines.append(f"| {r['attempt']} | {r['exit_code']} | {obs_str} | {tgt_str} | {'Yes' if r['within_tolerance'] else 'No'} |")
+            within_str = "Not measured" if r["within_tolerance"] is None else ("Yes" if r["within_tolerance"] else "No")
+            md_lines.append(f"| {r['attempt']} | {r['exit_code']} | {obs_str} | {tgt_str} | {within_str} |")
         md_lines.append("")
 
     md_lines.append("---")
@@ -475,7 +470,7 @@ def generate_report(
     for r in runs_summary["comparison_chart"]:
         obs_val = f"{r['observed']:.4f}" if r["observed"] is not None else "Crashed"
         tgt_val = f"{r['reported']:.4f}" if r["reported"] is not None else "N/A"
-        tol_val = "✓ Yes" if r["within_tolerance"] else "✗ No"
+        tol_val = "— Not measured" if r["within_tolerance"] is None else ("✓ Yes" if r["within_tolerance"] else "✗ No")
         chart_rows.append(f"<tr><td>{html.escape(str(r['attempt']))}</td><td>{r['exit_code']}</td><td>{obs_val}</td><td>{tgt_val}</td><td>{tol_val}</td></tr>")
     chart_rows_html = "".join(chart_rows)
 

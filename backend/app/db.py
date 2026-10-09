@@ -1,14 +1,63 @@
 import sqlite3
 import json
+import logging
 import os
 from typing import Optional, List, Dict, Any
+
+logger = logging.getLogger(__name__)
 
 class ConcurrentModificationError(Exception):
     """Raised when an optimistic locking version mismatch occurs."""
     pass
 
+class CorruptProjectStateError(Exception):
+    """
+    Raised when a project's persisted state_json cannot be validated back into a
+    ProjectState. Callers should surface this as a per-project error (422), never as a
+    generic server failure, so one unreadable row cannot look like a server outage.
+    """
+    def __init__(self, project_id: str, detail: str):
+        self.project_id = project_id
+        self.detail = detail
+        super().__init__(f"Corrupt persisted state for project '{project_id}': {detail}")
+
+# Process-wide redirect for the database location.
+#
+# Every database path in the application is the literal "data/rerun.db", passed down to
+# get_connection. The test suite therefore wrote to, and in one case deleted, the real
+# database that the running app uses, destroying live projects on every full test run.
+# Routing all connections through one resolver lets the suite redirect itself to a scratch
+# database without touching 50 call sites.
+_DB_PATH_OVERRIDE: Optional[str] = None
+
+def set_db_path_override(path: Optional[str]) -> None:
+    """Redirect every subsequent connection. Pass None to restore normal behaviour."""
+    global _DB_PATH_OVERRIDE
+    _DB_PATH_OVERRIDE = path
+
+PRODUCTION_DB_PATH = "data/rerun.db"
+
+def resolve_db_path(db_path: str = PRODUCTION_DB_PATH) -> str:
+    """
+    The database a caller should actually use.
+
+    Only the production path is redirected. A caller that names an explicit database, as
+    most tests do with a tmp_path, must get exactly the database it asked for.
+    """
+    target = _DB_PATH_OVERRIDE or os.getenv("RERUN_DB_PATH")
+    if not target:
+        return db_path
+    try:
+        is_production = os.path.normpath(db_path) == os.path.normpath(PRODUCTION_DB_PATH)
+    except Exception:
+        is_production = db_path == PRODUCTION_DB_PATH
+    return target if is_production else db_path
+
 def get_connection(db_path="data/rerun.db"):
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    db_path = resolve_db_path(db_path)
+    parent = os.path.dirname(db_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
@@ -67,6 +116,68 @@ def init_db(db_path="data/rerun.db"):
     ''')
     conn.commit()
     conn.close()
+
+    # Run the one-off repair at most once per database per process. init_db is called from
+    # insert_evidence, so running a full table scan plus a JSON parse of every project's
+    # state (reports included) on each evidence write made the API progressively slower.
+    resolved = resolve_db_path(db_path)
+    if resolved not in _REPAIRED_DATABASES:
+        _REPAIRED_DATABASES.add(resolved)
+        repair_unknown_error_classes(db_path)
+
+# Databases already swept by the error_class repair in this process.
+_REPAIRED_DATABASES: set = set()
+
+def repair_unknown_error_classes(db_path: str = "data/rerun.db") -> int:
+    """
+    Idempotent repair for rows written before an attempt error_class value was added to the
+    ErrorClass literal. Any attempt carrying an error_class outside the current literal is
+    rewritten to "unknown" so the row can be loaded again. Returns the number of rows repaired.
+    """
+    from typing import get_args
+    from agent.state import ErrorClass
+
+    allowed = set(get_args(ErrorClass))
+    repaired = 0
+    try:
+        conn = get_connection(db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, state_json FROM projects")
+        rows = cursor.fetchall()
+        for project_id, state_json in rows:
+            if not state_json:
+                continue
+            try:
+                data = json.loads(state_json)
+            except Exception:
+                continue
+            attempts = data.get("attempts")
+            if not isinstance(attempts, list):
+                continue
+            changed = False
+            for att in attempts:
+                if not isinstance(att, dict):
+                    continue
+                ec = att.get("error_class")
+                if ec is not None and ec not in allowed:
+                    logger.warning(
+                        "Repairing project %s: attempt error_class %r is not a valid ErrorClass; "
+                        "rewriting to 'unknown'", project_id, ec
+                    )
+                    att["error_class"] = "unknown"
+                    changed = True
+            if changed:
+                cursor.execute(
+                    "UPDATE projects SET state_json = ? WHERE id = ?",
+                    (json.dumps(data), project_id)
+                )
+                repaired += 1
+        if repaired:
+            conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.warning("error_class repair migration skipped: %s", e)
+    return repaired
 
 def save_project_state(db_path, project_id, benchmark_id, commit_sha, status, state_model, expected_version: Optional[int] = None):
     conn = get_connection(db_path)
@@ -129,8 +240,17 @@ def get_project_state(db_path, project_id):
     row = cursor.fetchone()
     conn.close()
     if row:
+        from pydantic import ValidationError
         from agent.state import ProjectState
-        state = ProjectState.model_validate_json(row[0])
+        try:
+            state = ProjectState.model_validate_json(row[0])
+        except ValidationError as e:
+            detail = "; ".join(
+                f"{'.'.join(str(p) for p in err.get('loc', ()))}: {err.get('msg', '')}"
+                for err in e.errors()[:5]
+            )
+            logger.error("Corrupt persisted state for project %s: %s", project_id, detail)
+            raise CorruptProjectStateError(project_id, detail) from e
         if has_version and row[1] is not None:
             state.version = row[1]
         return state
