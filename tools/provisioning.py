@@ -291,6 +291,66 @@ def _local_module_names(workspace: str) -> set:
             names.add(path.name.lower())
     return names
 
+def reachable_third_party_imports(workspace: str, entry_script: str) -> Optional[set]:
+    """
+    Third-party import roots reachable from one entry script, following local imports.
+
+    Provisioning used to request every unresolved import in the repository. For a repo of
+    independent experiments that means installing another experiment's dependencies to run
+    this one: the Hamiltonian Neural Networks spring task needs torch, numpy, scipy and
+    autograd, but the whole-repo scan also demanded gym and imageio, which only the pixel
+    experiment uses. An offline install then fails on packages the run never imports.
+
+    Returns None when the entry script cannot be analysed, so the caller falls back to the
+    whole-repository scan.
+    """
+    import ast
+    from tools.triage import get_stdlib_module_names
+
+    root = Path(workspace)
+    entry = root / entry_script
+    if not entry.is_file():
+        return None
+
+    stdlib = get_stdlib_module_names()
+    local_names = {
+        f.stem.lower() for f in root.rglob("*.py")
+        if not any(part in (".git", "__pycache__", ".site") for part in f.parts)
+    }
+    local_names |= {d.name.lower() for d in root.rglob("*") if d.is_dir()}
+
+    seen_files, queue, third_party = set(), [entry], set()
+    while queue:
+        current = queue.pop()
+        if current in seen_files or not current.is_file():
+            continue
+        seen_files.add(current)
+        try:
+            tree = ast.parse(current.read_text(encoding="utf-8", errors="ignore"))
+        except Exception:
+            continue
+        for node in ast.walk(tree):
+            names = []
+            if isinstance(node, ast.Import):
+                names = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names = [node.module]
+            for name in names:
+                head = name.split(".")[0]
+                low = head.lower()
+                if low in stdlib:
+                    continue
+                if low in local_names:
+                    # Follow the local module so its imports count too.
+                    for cand in (root / f"{head}.py", current.parent / f"{head}.py",
+                                 root / head / "__init__.py"):
+                        if cand.is_file():
+                            queue.append(cand)
+                    continue
+                third_party.add(low)
+    return third_party or None
+
+
 def infer_packages_from_imports(
     triage_report: Optional[dict],
     workspace: Optional[str] = None
@@ -337,7 +397,8 @@ def infer_packages_from_imports(
 def build_provisioning_plan(
     workspace: str,
     project_id: str,
-    triage_report: Optional[dict] = None
+    triage_report: Optional[dict] = None,
+    entry_script: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Constructs a dependency provisioning plan.
@@ -352,6 +413,25 @@ def build_provisioning_plan(
     if not packages:
         packages = infer_packages_from_imports(triage_report, workspace)
         inferred_from_imports = bool(packages)
+        # Narrow to what the command being run actually imports, so one experiment's
+        # dependencies are not required to run another's.
+        if packages and entry_script:
+            reachable = reachable_third_party_imports(workspace, entry_script)
+            if reachable:
+                scoped = [
+                    pkg for pkg in packages
+                    if normalize_package_name(pkg["name"]) in {
+                        normalize_package_name(r) for r in reachable
+                    } or any(
+                        normalize_package_name(alias) == normalize_package_name(pkg["name"])
+                        for r in reachable
+                        for alias in __import__(
+                            "tools.triage", fromlist=["MODULE_PACKAGE_ALIASES"]
+                        ).MODULE_PACKAGE_ALIASES.get(r, [r])
+                    )
+                ]
+                if scoped:
+                    packages = scoped
     python_image = select_python_image(workspace, triage_report)
     target_whl = f"data/runs/{project_id}/wheelhouse"
 

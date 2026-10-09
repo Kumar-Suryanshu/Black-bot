@@ -38,49 +38,88 @@ MODULE_TO_PACKAGE = {
 MISSING_MODULE_RE = re.compile(r"ModuleNotFoundError: No module named ['\"]([\w\.]+)['\"]")
 
 
-def _wheelhouse_version(package: str) -> Optional[str]:
+def _wheelhouse_version(package: str, project_id: Optional[str] = None) -> Optional[str]:
     """The exact version available offline, so the pin is real rather than invented."""
     from tools.exec_tools import query_package_index
 
-    versions = query_package_index(package)
+    versions = query_package_index(package, project_id=project_id)
     return sorted(versions)[-1] if versions else None
 
 
 def diagnose_missing_dependency(
     state: ProjectState, workspace: str, log_text: str
 ) -> Optional[Tuple[Hypothesis, List[Edit], str, str]]:
-    """A module named in a traceback, pinned to the version actually in the wheelhouse."""
+    """
+    Declare the dependencies the experiment imports, pinned to versions available offline.
+
+    The named module is the one that stopped the run, but fixing only that module means the
+    next run stops on the next one. A repository that declares nothing needs every import it
+    actually uses declared, and the patch budget is small, so this proposes one edit
+    covering all of them rather than one patch per module.
+    """
     match = MISSING_MODULE_RE.search(log_text or "")
     if not match:
         return None
 
-    module = match.group(1).split(".")[0]
-    package = MODULE_TO_PACKAGE.get(module, module)
-    version = _wheelhouse_version(package)
-    if not version:
-        return None  # cannot pin it honestly, so leave it to the Solver
+    project_id = getattr(state, "project_id", None)
+    failing_module = match.group(1).split(".")[0]
 
     req = Path(workspace) / "requirements.txt"
     existing = req.read_text(encoding="utf-8") if req.exists() else ""
-    if re.search(rf"(?im)^\s*{re.escape(package)}\s*==", existing):
-        return None  # already declared; the failure is something else
+
+    # Everything the planned command actually imports, so another experiment's dependencies
+    # are not dragged in.
+    modules = [failing_module]
+    entry_script = None
+    if state.plan and state.plan.command:
+        import shlex
+        entry_script = next(
+            (t for t in shlex.split(state.plan.command) if t.endswith(".py")), None
+        )
+    if entry_script:
+        try:
+            from tools.provisioning import reachable_third_party_imports
+            reachable = reachable_third_party_imports(workspace, entry_script) or set()
+            modules.extend(sorted(reachable))
+        except Exception:
+            pass
+
+    pins, covered = [], []
+    for module in dict.fromkeys(modules):
+        package = MODULE_TO_PACKAGE.get(module, module)
+        if re.search(rf"(?im)^\s*{re.escape(package)}\s*==", existing):
+            continue
+        version = _wheelhouse_version(package, project_id)
+        if not version:
+            continue
+        line = f"{package}=={version}"
+        if line not in pins:
+            pins.append(line)
+            covered.append(module)
+
+    if not pins:
+        return None
+    # The module that actually stopped the run must be among them, or this is not the fix.
+    failing_package = MODULE_TO_PACKAGE.get(failing_module, failing_module)
+    if not any(p.lower().startswith(failing_package.lower() + "==") for p in pins):
+        return None
 
     hypothesis = Hypothesis(
         id=f"H-{len(state.hypotheses) + 1}",
         text=(
-            f"The run failed with ModuleNotFoundError for '{module}', which is provided by "
-            f"{package}. requirements.txt does not declare it."
+            f"The run failed with ModuleNotFoundError for '{failing_module}'. The repository "
+            f"does not declare its dependencies, so {', '.join(covered)} are undeclared."
         ),
         status="confirmed",
         evidence=[],           # filled by the caller with the recorded log evidence
         tested_with=["inspect_error"],
         error_class="dependency_missing",
     )
-    edits = [Edit(file="requirements.txt", op="append_line", new=f"{package}=={version}")]
+    edits = [Edit(file="requirements.txt", op="append_line", new="\n".join(pins))]
     rationale = (
-        f"ModuleNotFoundError: No module named '{module}'. {package} is imported by the "
-        f"experiment but absent from requirements.txt; pinned to {version}, the version "
-        f"present in the offline wheelhouse."
+        f"ModuleNotFoundError: No module named '{failing_module}'. The experiment imports "
+        f"{', '.join(covered)}, none of which are declared. Pinned to the versions present "
+        f"in the offline wheelhouse: {', '.join(pins)}."
     )
     return hypothesis, edits, rationale, "dependency"
 

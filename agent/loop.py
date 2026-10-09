@@ -480,9 +480,18 @@ def handle_preflight(state: ProjectState, deps: dict):
 
     # Check safe dependency provisioning (Stage 6)
     from tools.provisioning import build_provisioning_plan, download_wheels_for_project
+    # The entry script of the command actually being run, so provisioning is scoped to it.
+    entry_script = None
+    if state.plan and state.plan.command:
+        import shlex as _shlex
+        for token in _shlex.split(state.plan.command):
+            if token.endswith(".py"):
+                entry_script = token
+                break
     plan = build_provisioning_plan(
         ws, state.project_id,
-        triage_report=(state.repo_profile or {}).get("triage")
+        triage_report=(state.repo_profile or {}).get("triage"),
+        entry_script=entry_script,
     )
     if plan.get("status") == "NEEDS_BUILD":
         state.preflight["blockers"].append("NEEDS_BUILD")
