@@ -9,6 +9,8 @@ import { DiffView } from '../components/dashboard/DiffView';
 import { AttemptsTable } from '../components/dashboard/AttemptsTable';
 import { ApprovalModal } from '../components/dashboard/ApprovalModal';
 import { ProvisioningModal } from '../components/dashboard/ProvisioningModal';
+import { PreflightNotices } from '../components/dashboard/PreflightNotices';
+import { EvidenceLedger } from '../components/dashboard/EvidenceLedger';
 import { EvidenceDrawer } from '../components/ui/EvidenceDrawer';
 import { Footer } from '../components/layout/Footer';
 import { useEventStream } from '../hooks/useEventStream';
@@ -206,6 +208,13 @@ export const Dashboard: React.FC = () => {
 
       {/* Main Operational Console Grid */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 flex flex-col gap-6">
+        {/* Blockers, warnings and unresolved issues — all recorded by the backend on every
+            poll and, until now, rendered nowhere. */}
+        <PreflightNotices
+          preflight={state?.preflight}
+          unresolvedIssues={state?.unresolved_issues}
+        />
+
         {/* Report ready banner alert */}
         {isReportReady && (
           <div className="p-4 rounded-xl bg-[#FAF7F0] border-2 border-rust flex items-center justify-between shadow-md">
@@ -260,7 +269,8 @@ export const Dashboard: React.FC = () => {
         {/* Bottom Section: Attempts Table & Budget Counters */}
         <div className="space-y-4 pb-8">
           <BudgetBar budgets={state?.budgets} />
-          <AttemptsTable attempts={state?.attempts || []} />
+          <AttemptsTable attempts={state?.attempts || []} claims={state?.claims} />
+          <EvidenceLedger projectId={id || ''} onSelectEvidence={setSelectedEvidenceId} />
         </div>
       </main>
 

@@ -154,6 +154,27 @@ export async function submitApproval(
   return res.json();
 }
 
+/** The server-rendered Markdown report — the complete document, not a client-side summary. */
+export async function fetchReportMarkdown(projectId: string): Promise<string> {
+  const res = await fetch(`${BASE_URL}/api/projects/${projectId}/report.md`);
+  if (!res.ok) throw new Error(`Failed to fetch report markdown: ${res.statusText}`);
+  return res.text();
+}
+
+/** The project's evidence ledger. Entries the stores cannot serve carry available:false. */
+export async function fetchEvidenceLedger(projectId: string): Promise<EvidenceItem[]> {
+  const res = await fetch(`${BASE_URL}/api/projects/${projectId}/evidence`);
+  if (!res.ok) throw new Error(`Failed to fetch evidence ledger: ${res.statusText}`);
+  return res.json();
+}
+
+/** Emergency stop: terminates every running project and kills all sandbox containers. */
+export async function killSwitch(): Promise<{ status: string }> {
+  const res = await fetch(`${BASE_URL}/api/admin/kill-switch`, { method: 'POST' });
+  if (!res.ok) throw new Error(`Kill switch failed: ${res.statusText}`);
+  return res.json();
+}
+
 export async function fetchEvidence(projectId: string, evidenceId: string): Promise<EvidenceItem> {
   const res = await fetch(`${BASE_URL}/api/projects/${projectId}/evidence/${evidenceId}`);
   if (!res.ok) throw new Error(`Failed to fetch evidence: ${res.statusText}`);

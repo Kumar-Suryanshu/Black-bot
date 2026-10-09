@@ -8,6 +8,7 @@ from pydantic import BaseModel
 import uuid
 import datetime
 
+from agent.config import MAX_PATCHES, MAX_STEPS
 from tools.report import generate_report
 
 from backend.app.models import (
@@ -250,7 +251,14 @@ def get_project(id: str):
         "simulated": state.simulated,
         "phase": state.phase,
         "pending": state.pending,
-        "budgets": state.budgets,
+        # The limits travel with the counters. Without them the console had to hardcode its
+        # own denominators (40 steps / 3 patches), which silently lied whenever MAX_STEPS or
+        # MAX_PATCHES was configured differently from the default.
+        "budgets": {
+            **state.budgets,
+            "max_steps": state.budgets.get("max_steps", MAX_STEPS),
+            "max_patches": state.budgets.get("max_patches", MAX_PATCHES),
+        },
         "attempts": [a.model_dump() for a in state.attempts],
         "patches": [p.model_dump() for p in state.patches],
         "provisioning_plan": state.provisioning_plan,
@@ -264,7 +272,11 @@ def get_project(id: str):
             "after_n_fixes": state.final.get("after_n_fixes", 0),
         } if state.final else None,
         "unresolved_issues": state.unresolved_issues,
-        "preflight": state.preflight
+        "preflight": state.preflight,
+        # How many evidence items the agent claims to have recorded. The console uses this to
+        # decide whether to offer the ledger at all; `GET /{id}/evidence` reports what can
+        # actually be served, which is not always the same number (see that route).
+        "evidence_count": len(state.evidence_ids),
     }
 
 @router.get("/api/projects/{id}/claims-draft")
@@ -637,21 +649,42 @@ def process_approval(approval_id: str, req: ApprovalRequest):
 
 @router.get("/api/projects/{id}/evidence")
 def list_evidence(id: str):
+    """
+    The project's evidence ledger, reconciled against what the agent says it recorded.
+
+    The database and the on-disk ledger can each be missing entries the other has -- a row
+    lost to the old global primary key, or a ledger deleted with its run directory -- so both
+    are merged rather than preferring one. Any id the state references but neither source can
+    serve is returned with `available: false`, because quietly returning a shorter list is
+    how an incomplete audit trail passes for a complete one.
+    """
     state = get_project_state("data/rerun.db", id)
     if not state:
         raise HTTPException(status_code=404, detail="Project not found")
+
     from backend.app.db import get_all_evidence
-    items = get_all_evidence("data/rerun.db", id)
-    if items:
-        return items
+
+    by_id = {}
     ledger_path = str(paths.evidence_ledger_path(id))
     if os.path.exists(ledger_path):
         try:
             with open(ledger_path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                for entry in json.load(f):
+                    if isinstance(entry, dict) and entry.get("id"):
+                        by_id[entry["id"]] = {**entry, "available": True, "source": "ledger"}
         except Exception:
             pass
-    return []
+
+    # The database wins where both have the id: it is the copy the single-item route serves.
+    for entry in get_all_evidence("data/rerun.db", id):
+        if entry.get("id"):
+            by_id[entry["id"]] = {**entry, "available": True, "source": "db"}
+
+    for eid in state.evidence_ids:
+        if eid not in by_id:
+            by_id[eid] = {"id": eid, "project_id": id, "available": False}
+
+    return [by_id[k] for k in sorted(by_id)]
 
 @router.get("/api/projects/{id}/evidence/{eid}")
 def get_evidence(id: str, eid: str):

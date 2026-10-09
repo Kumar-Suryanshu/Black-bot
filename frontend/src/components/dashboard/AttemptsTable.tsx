@@ -1,12 +1,39 @@
 import React from 'react';
-import type { Attempt } from '../../api/types';
+import type { Attempt, Claim } from '../../api/types';
 import { CheckCircle2, XCircle, AlertCircle } from 'lucide-react';
 
 interface AttemptsTableProps {
   attempts: Attempt[];
+  /** The project's claims, used to find which metric key this run was judged on. */
+  claims?: Claim[];
 }
 
-export const AttemptsTable: React.FC<AttemptsTableProps> = ({ attempts }) => {
+/**
+ * The metric this attempt was actually judged on.
+ *
+ * This used to read `att.metrics?.test_accuracy_mean`, a key that only exists in the digits
+ * benchmarks: every other paper fell through to the comparison entry, and a project whose
+ * claim is `test_loss` showed nothing of its own metrics. The claim names its own key, so
+ * ask the claim.
+ */
+const observedMetric = (att: Attempt, claims: Claim[]): number | null => {
+  const metrics = att.metrics ?? {};
+  for (const claim of claims) {
+    for (const key of [claim.result_key, claim.metric, claim.id]) {
+      if (key && metrics[key] !== undefined && metrics[key] !== null) {
+        const value = Number(metrics[key]);
+        if (!Number.isNaN(value)) return value;
+      }
+    }
+  }
+  const comparison = att.comparison?.[0];
+  if (comparison && comparison.observed !== null && comparison.observed !== undefined) {
+    return Number(comparison.observed);
+  }
+  return null;
+};
+
+export const AttemptsTable: React.FC<AttemptsTableProps> = ({ attempts, claims = [] }) => {
   if (!attempts || attempts.length === 0) {
     return (
       <div className="bg-[#FAF7F0] border border-[#CDC5B4] rounded-xl p-6 text-center text-[#4A5470] font-mono text-xs shadow-sm">
@@ -29,6 +56,8 @@ export const AttemptsTable: React.FC<AttemptsTableProps> = ({ attempts }) => {
               <th className="py-2.5 px-4">Run #</th>
               <th className="py-2.5 px-4">Exit Code</th>
               <th className="py-2.5 px-4">Error / Diagnosis</th>
+              <th className="py-2.5 px-4">Duration</th>
+              <th className="py-2.5 px-4">Patches</th>
               <th className="py-2.5 px-4">Observed Metric</th>
               <th className="py-2.5 px-4">Tolerance Check</th>
             </tr>
@@ -38,7 +67,8 @@ export const AttemptsTable: React.FC<AttemptsTableProps> = ({ attempts }) => {
               const comp = att.comparison?.[0];
               const isCrash = att.exit_code !== 0;
               const withinTol = comp?.within_tolerance;
-              const metricVal = att.metrics?.test_accuracy_mean ?? comp?.observed;
+              const metricVal = observedMetric(att, claims);
+              const patchIds = att.patches_applied ?? att.used_patches ?? [];
 
               return (
                 <tr key={att.n} className="hover:bg-[#F4F1E8]/80 transition-colors">
@@ -53,12 +83,47 @@ export const AttemptsTable: React.FC<AttemptsTableProps> = ({ attempts }) => {
                     </span>
                   </td>
                   <td className="py-2.5 px-4">
-                    {att.error_class ? (
-                      <span className="text-amber-800 font-semibold">{att.error_class}</span>
-                    ) : isCrash ? (
-                      <span className="text-red-700 font-medium">Runtime Crash</span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {/* timed_out and oom were recorded on every attempt and shown nowhere,
+                          so a run killed by the timeout looked like an ordinary crash. */}
+                      {att.timed_out && (
+                        <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-400 text-[10px] font-bold">
+                          TIMEOUT
+                        </span>
+                      )}
+                      {att.oom && (
+                        <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-800 border border-red-300 text-[10px] font-bold">
+                          OOM
+                        </span>
+                      )}
+                      {att.error_class ? (
+                        <span className="text-amber-800 font-semibold">{att.error_class}</span>
+                      ) : att.timed_out || att.oom ? null : isCrash ? (
+                        <span className="text-red-700 font-medium">Runtime Crash</span>
+                      ) : (
+                        <span className="text-[#4A5470]">Exit 0 (Completed)</span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="py-2.5 px-4 text-[#4A5470]">
+                    {att.duration_s !== undefined && att.duration_s !== null
+                      ? `${Number(att.duration_s).toFixed(1)}s`
+                      : <span className="text-[#CDC5B4]">—</span>}
+                  </td>
+                  <td className="py-2.5 px-4">
+                    {patchIds.length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {patchIds.map((pid) => (
+                          <span
+                            key={pid}
+                            className="px-1.5 py-0.5 rounded bg-[#E5DFD3] border border-[#CDC5B4] text-[10px] font-bold"
+                          >
+                            {pid}
+                          </span>
+                        ))}
+                      </div>
                     ) : (
-                      <span className="text-[#4A5470]">Exit 0 (Completed)</span>
+                      <span className="text-[#CDC5B4]">none</span>
                     )}
                   </td>
                   <td className="py-2.5 px-4 text-[#1F2A44]">
