@@ -45,6 +45,7 @@ from agent.critic.prompts import CRITIC_REPORT_REVIEW_PROMPT
 
 # Re-export FakeSandbox for backward compatibility with existing tests
 from sandbox.fake import FakeSandbox
+from tools import paths
 
 _OVERRIDE_SANDBOX = None
 
@@ -83,8 +84,8 @@ def resolve_attempt_log(state: ProjectState, deps: dict, attempt_num: Optional[i
     n = att.n if att else (attempt_num or len(state.attempts) or 1)
     is_latest = (attempt_num is None) or (n == (state.attempts[-1].n if state.attempts else n))
 
-    log_dir = Path("data/runs") / state.project_id / "logs"
-    ws = deps.get("workspace", state.workspace or f"data/runs/{state.project_id}/workspace")
+    log_dir = paths.logs_dir(state.project_id)
+    ws = deps.get("workspace", state.workspace or paths.workspace_path(state.project_id))
 
     candidates: list = []
     if att and att.log_path:
@@ -289,7 +290,7 @@ def handle_ingest(state: ProjectState, deps: dict):
             f"Run is SIMULATED: sandbox is {type(sandbox).__name__}, not a real container"
         )
 
-    ws_path = state.workspace or deps.get("workspace", f"data/runs/{state.project_id}/workspace")
+    ws_path = state.workspace or deps.get("workspace", paths.workspace_path(state.project_id))
     state.workspace = ws_path
     deps["workspace"] = ws_path
     os.makedirs(ws_path, exist_ok=True)
@@ -333,7 +334,7 @@ def handle_ingest(state: ProjectState, deps: dict):
 
 def handle_analyze(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
-    ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
+    ws = deps.get("workspace", paths.workspace_path(state.project_id))
     state.repo_profile = inspect_repository(ws)
     
     paper_path = state.paper_path or deps.get("paper_path", "benchmarks/papers/digits_softmax.pdf")
@@ -447,7 +448,7 @@ def handle_plan(state: ProjectState, deps: dict):
 
 def handle_preflight(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
-    ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
+    ws = deps.get("workspace", paths.workspace_path(state.project_id))
     # Reflect the real host. These were hardcoded False, so a GPU repository was blocked even
     # on a machine with a working GPU and GPU_ENABLED=true.
     from sandbox.limits import get_limits
@@ -522,7 +523,7 @@ def handle_preflight(state: ProjectState, deps: dict):
         return
 
     if plan.get("needed") and state.provisioning_approved:
-        target_whl = Path(f"data/runs/{state.project_id}/wheelhouse")
+        target_whl = paths.wheelhouse_dir(state.project_id)
         res = download_wheels_for_project(
             state.project_id,
             [p["name"] for p in plan["packages"]],
@@ -538,7 +539,7 @@ def handle_preflight(state: ProjectState, deps: dict):
 
 def handle_setup(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
-    ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
+    ws = deps.get("workspace", paths.workspace_path(state.project_id))
     sb = deps.get("sandbox", get_sandbox())
     
     req_file = Path(ws) / "requirements.txt"
@@ -568,7 +569,7 @@ def handle_setup(state: ProjectState, deps: dict):
 
 def handle_run(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
-    ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
+    ws = deps.get("workspace", paths.workspace_path(state.project_id))
     sb = deps.get("sandbox", get_sandbox())
     
     n = len(state.attempts) + 1
@@ -613,7 +614,7 @@ def handle_run(state: ProjectState, deps: dict):
 def handle_observe(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
     latest = state.attempts[-1]
-    ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
+    ws = deps.get("workspace", paths.workspace_path(state.project_id))
     log_file = resolve_attempt_log(state, deps, latest.n)
     log_text = log_file.read_text(encoding="utf-8", errors="ignore") if log_file else ""
     
@@ -633,7 +634,7 @@ def handle_observe(state: ProjectState, deps: dict):
 
 def handle_validate(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
-    ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
+    ws = deps.get("workspace", paths.workspace_path(state.project_id))
     latest = state.attempts[-1]
 
     from tools.metrics import extract_metric, record_metric_evidence
@@ -713,7 +714,7 @@ def handle_compare(state: ProjectState, deps: dict):
 
 def handle_diagnose(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
-    ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
+    ws = deps.get("workspace", paths.workspace_path(state.project_id))
     state.budgets["steps_used"] = state.budgets.get("steps_used", 0) + 1
     
     # Safety net nudge for silent divergence
@@ -922,7 +923,7 @@ def handle_diagnose(state: ProjectState, deps: dict):
             # could never be confirmed.
             ev_ids = []
             try:
-                audit_dir = Path("data") / "runs" / state.project_id
+                audit_dir = paths.run_dir(state.project_id)
                 audit_dir.mkdir(parents=True, exist_ok=True)
                 audit_path = audit_dir / f"config_audit_step{step_num}.json"
                 audit_path.write_text(json.dumps(state.config_diff, indent=2), encoding="utf-8")
@@ -1195,7 +1196,7 @@ def attempt_deterministic_patch(state: ProjectState, deps: dict, ws: str, step_n
 
 def handle_patch_propose(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
-    ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
+    ws = deps.get("workspace", paths.workspace_path(state.project_id))
 
     # Charge a step for every proposal. Defence in depth: even if the revision round counter
     # were ever wrong again, guard_budgets still bounds the propose/policy/review cycle.
@@ -1287,7 +1288,7 @@ def handle_patch_propose(state: ProjectState, deps: dict):
 def handle_policy_check(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
     patch = state.patches[-1]
-    ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
+    ws = deps.get("workspace", paths.workspace_path(state.project_id))
     
     pol_res = check_policy(state, patch, ws)
     patch.policy_result = pol_res
@@ -1386,7 +1387,7 @@ def handle_approval(state: ProjectState, deps: dict):
 def handle_patch_apply(state: ProjectState, deps: dict):
     emit_event(state, "system", "phase_changed", f"Transitioned to {state.phase}")
     patch = state.patches[-1]
-    ws = deps.get("workspace", f"data/runs/{state.project_id}/workspace")
+    ws = deps.get("workspace", paths.workspace_path(state.project_id))
     sb = deps.get("sandbox", get_sandbox())
     
     success = apply_patch(state, patch, ws)
@@ -1558,7 +1559,7 @@ def run_project(state: ProjectState, deps: Optional[dict] = None):
     if state.workspace:
         deps_dict.setdefault("workspace", state.workspace)
     else:
-        state.workspace = deps_dict.get("workspace", f"data/runs/{state.project_id}/workspace")
+        state.workspace = deps_dict.get("workspace", paths.workspace_path(state.project_id))
         deps_dict["workspace"] = state.workspace
         
     if state.latest_log_path and "latest_log_path" not in deps_dict:

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from .limits import get_limits
+from tools import paths
 
 @dataclass
 class RunResult:
@@ -101,7 +102,7 @@ def probe_gpu() -> dict:
 def build_container_spec(project_id: str, workspace: Path, is_setup: bool, command: str, python_image: str = "rerun-base:py311") -> dict:
     limits = get_limits()
     wheelhouse = Path("wheelhouse").absolute()
-    project_whl = Path(f"data/runs/{project_id}/wheelhouse").absolute()
+    project_whl = paths.wheelhouse_dir(project_id).absolute()
     
     spec = dict(
         image=python_image,
@@ -140,7 +141,7 @@ def build_container_spec(project_id: str, workspace: Path, is_setup: bool, comma
         # installed, and roughly that again while unpacking) exhausted it and the install
         # died with "No space left on device" even with ample disk free. Give the installer
         # a disk-backed scratch directory outside the repository workspace instead.
-        pip_tmp = Path(f"data/runs/{project_id}/pip_tmp").absolute()
+        pip_tmp = (paths.run_dir(project_id) / "pip_tmp").absolute()
         pip_tmp.mkdir(parents=True, exist_ok=True)
         spec["volumes"][str(pip_tmp)] = {"bind": "/pip_tmp", "mode": "rw"}
         spec["environment"]["TMPDIR"] = "/pip_tmp"
@@ -258,7 +259,7 @@ def run_container(project_id: str, workspace: Path, is_setup: bool, command: str
     if sys.platform != "win32":
         _make_tree_group_writable(workspace)
 
-    log_dir = Path("data") / "runs" / project_id / "logs"
+    log_dir = paths.logs_dir(project_id)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"{kind}_{n}.log"
 
@@ -318,7 +319,7 @@ def run_container(project_id: str, workspace: Path, is_setup: bool, command: str
         oom = False
         
     # Harvest outputs
-    dest_output_dir = Path("data") / "runs" / project_id / "outputs" / f"run_{n}"
+    dest_output_dir = paths.run_dir(project_id) / "outputs" / f"run_{n}"
     dest_output_dir.mkdir(parents=True, exist_ok=True)
     # Simple copy over if anything was written
     if outputs_dir.exists():

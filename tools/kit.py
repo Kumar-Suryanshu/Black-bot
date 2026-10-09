@@ -7,6 +7,7 @@ from typing import Dict, Any, Optional
 
 from agent.state import ProjectState
 from tools.report import generate_report
+from tools import paths
 
 def format_unified_diff(edit_or_diff: Any, filename: str) -> str:
     """Ensures patch diff is cleanly formatted as a unified diff."""
@@ -17,7 +18,13 @@ def format_unified_diff(edit_or_diff: Any, filename: str) -> str:
         return diff_text + "\n"
     return f"--- a/{filename}\n+++ b/{filename}\n@@ -1,1 +1,1 @@\n# Automated patch edit\n"
 
-def generate_reproduce_markdown(state: ProjectState, base_dir: str = "data") -> str:
+def _run_dir(project_id: str, base_dir):
+    """`base_dir=None` follows tools.paths; an explicit base_dir is still honoured."""
+    if base_dir is None:
+        return paths.run_dir(project_id)
+    return Path(base_dir) / "runs" / project_id
+
+def generate_reproduce_markdown(state: ProjectState, base_dir: Optional[str] = None) -> str:
     """
     Generates reproduce.md containing exact instructions, environment specs,
     commit SHA, seeds, and expected vs observed metrics (§R7).
@@ -33,7 +40,7 @@ def generate_reproduce_markdown(state: ProjectState, base_dir: str = "data") -> 
     if state.provisioning_plan and "packages" in state.provisioning_plan:
         for p in state.provisioning_plan["packages"]:
             req_lines.append(f"{p.get('package')}=={p.get('version', 'latest')}")
-    ws = Path(base_dir) / "runs" / state.project_id / "workspace"
+    ws = _run_dir(state.project_id, base_dir) / "workspace"
     if ws.is_dir() and (ws / "requirements.txt").is_file():
         try:
             req_lines.extend([l.strip() for l in (ws / "requirements.txt").read_text().splitlines() if l.strip()])
@@ -141,7 +148,7 @@ def generate_reproduce_markdown(state: ProjectState, base_dir: str = "data") -> 
 
     return "\n".join(lines) + "\n"
 
-def build_reproduction_kit(state: ProjectState, base_dir: str = "data") -> bytes:
+def build_reproduction_kit(state: ProjectState, base_dir: Optional[str] = None) -> bytes:
     """
     Packages a self-contained reproduction kit into a ZIP archive:
     - patches/*.diff
@@ -151,7 +158,7 @@ def build_reproduction_kit(state: ProjectState, base_dir: str = "data") -> bytes
     - report.md & report.html
     - evidence_index.json
     """
-    run_dir = Path(base_dir) / "runs" / state.project_id
+    run_dir = _run_dir(state.project_id, base_dir)
     zip_buffer = io.BytesIO()
 
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:

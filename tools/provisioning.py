@@ -7,6 +7,7 @@ import difflib
 import shutil
 from pathlib import Path
 from typing import List, Dict, Any, Optional
+from tools import paths
 
 logger = logging.getLogger(__name__)
 
@@ -433,7 +434,7 @@ def build_provisioning_plan(
                 if scoped:
                     packages = scoped
     python_image = select_python_image(workspace, triage_report)
-    target_whl = f"data/runs/{project_id}/wheelhouse"
+    target_whl = str(paths.wheelhouse_dir(project_id))
 
     if not packages:
         return {
@@ -524,7 +525,7 @@ def download_wheels_for_project(
     dest_wheelhouse = Path(dest_wheelhouse).absolute()
     dest_wheelhouse.mkdir(parents=True, exist_ok=True)
 
-    log_dir = Path("data") / "runs" / project_id / "logs"
+    log_dir = paths.logs_dir(project_id)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / "provisioning.log"
 

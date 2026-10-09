@@ -7,6 +7,7 @@ from tools.triage import triage_report
 from backend.app.main import app
 from backend.app.db import init_db, save_project_state, get_project_state
 from agent.state import ProjectState
+from tools import paths
 
 def test_triage_clean_repo(tmp_path):
     """Clean repo with valid Python code and standard library should be FEASIBLE."""
@@ -179,7 +180,7 @@ def test_triage_api_endpoint(tmp_path, monkeypatch):
     monkeypatch.setattr("backend.app.routes.save_project_state", lambda db, pid, b, r, p, s: save_project_state(test_db, pid, b, r, p, s))
 
     # Create dummy project workspace
-    ws = Path("data/runs/proj_triage_test/workspace")
+    ws = paths.workspace_dir("proj_triage_test")
     ws.mkdir(parents=True, exist_ok=True)
     (ws / "main.py").write_text("import math\nprint(math.pi)\n")
 
@@ -205,8 +206,8 @@ def test_triage_api_endpoint(tmp_path, monkeypatch):
         assert "imports" in data
     finally:
         import shutil
-        if Path("data/runs/proj_triage_test").exists():
-            shutil.rmtree("data/runs/proj_triage_test")
+        if paths.run_dir("proj_triage_test").exists():
+            shutil.rmtree(paths.run_dir("proj_triage_test"))
 
 
 # ---------------------------------------------------------------------------

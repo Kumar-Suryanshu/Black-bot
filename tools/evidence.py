@@ -4,12 +4,26 @@ import os
 import shutil
 import datetime
 from agent.state import Evidence
+from tools import paths
 
-def record_evidence(project_state, type_, source_path, line_start, line_end, tool, tool_call_id, data_dir="data"):
+
+def _project_run_dir(project_id, data_dir):
+    """
+    Where this project's evidence lives.
+
+    `data_dir=None` (the default) follows `tools.paths`, so the test suite's redirect of
+    the runs root applies here too. An explicit `data_dir` is still honoured for callers
+    that point evidence at a directory of their own.
+    """
+    if data_dir is None:
+        return str(paths.run_dir(project_id))
+    return os.path.join(data_dir, "runs", project_id)
+
+def record_evidence(project_state, type_, source_path, line_start, line_end, tool, tool_call_id, data_dir=None):
     ev_id = f"E-{len(project_state.evidence_ids) + 1:03d}"
     
     basename = os.path.basename(source_path)
-    snapshot_dir = os.path.join(data_dir, "runs", project_state.project_id, "evidence")
+    snapshot_dir = os.path.join(_project_run_dir(project_state.project_id, data_dir), "evidence")
     os.makedirs(snapshot_dir, exist_ok=True)
     snapshot_path = os.path.join(snapshot_dir, f"{ev_id}_{basename}")
     
@@ -49,7 +63,7 @@ def record_evidence(project_state, type_, source_path, line_start, line_end, too
     project_state.evidence_ids.append(ev_id)
     
     # 1. Persist to ledger file data/runs/<project_id>/evidence.json (D12)
-    ledger_path = os.path.join(data_dir, "runs", project_state.project_id, "evidence.json")
+    ledger_path = os.path.join(_project_run_dir(project_state.project_id, data_dir), "evidence.json")
     ledger = []
     if os.path.exists(ledger_path):
         try:
@@ -67,13 +81,13 @@ def record_evidence(project_state, type_, source_path, line_start, line_end, too
     # 2. Persist to SQLite evidence table (D12)
     try:
         from backend.app.db import insert_evidence
-        db_path = os.path.join(data_dir, "rerun.db")
+        db_path = os.path.join(data_dir, "rerun.db") if data_dir else "data/rerun.db"
         insert_evidence(db_path, ev.model_dump(), project_state.project_id)
     except Exception:
         pass
 
     try:
-        if data_dir != "data":
+        if data_dir not in (None, "data"):
             from backend.app.db import insert_evidence
             insert_evidence("data/rerun.db", ev.model_dump(), project_state.project_id)
     except Exception:
@@ -81,7 +95,7 @@ def record_evidence(project_state, type_, source_path, line_start, line_end, too
 
     return ev
 
-def load_evidence_artifact(project_id, eid, data_dir="data"):
+def load_evidence_artifact(project_id, eid, data_dir=None):
     """
     Returns the text of the artifact the ledger records for EXACTLY this evidence id.
 
@@ -94,7 +108,7 @@ def load_evidence_artifact(project_id, eid, data_dir="data"):
     The ledger records the exact artifact_path per id, so resolve through it. Where an id
     appears more than once (snapshots accumulated across runs), the most recent entry wins.
     """
-    ledger_path = os.path.join(data_dir, "runs", project_id, "evidence.json")
+    ledger_path = os.path.join(_project_run_dir(project_id, data_dir), "evidence.json")
     artifact_path = None
     if os.path.exists(ledger_path):
         try:
@@ -119,7 +133,7 @@ def load_evidence_artifact(project_id, eid, data_dir="data"):
     # several files sharing the id prefix is exactly the ambiguity this function exists to
     # remove, and guessing between them is what allowed a quote to be "verified" against the
     # wrong artifact.
-    snapshot_dir = os.path.join(data_dir, "runs", project_id, "evidence")
+    snapshot_dir = os.path.join(_project_run_dir(project_id, data_dir), "evidence")
     if not os.path.isdir(snapshot_dir):
         return None
     try:

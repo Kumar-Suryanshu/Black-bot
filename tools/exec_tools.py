@@ -2,6 +2,7 @@ import os
 import re
 from pathlib import Path
 from typing import List, Optional
+from tools import paths
 
 def query_package_index(
     package_name: str,
@@ -18,7 +19,7 @@ def query_package_index(
     """
     search_dirs = [Path(wheelhouse_dir)]
     if project_id:
-        search_dirs.append(Path("data") / "runs" / project_id / "wheelhouse")
+        search_dirs.append(paths.wheelhouse_dir(project_id))
 
     norm_target = re.sub(r"[-_.]+", "-", package_name).lower()
     versions = []

@@ -13,6 +13,7 @@ Regression tests for two defects that made the whole API unresponsive.
 import asyncio
 import os
 import re
+from pathlib import Path
 
 import pytest
 
@@ -142,6 +143,61 @@ def test_the_suite_does_not_delete_the_real_database():
 
     assert not offending, (
         "test code deletes the production database: " + "; ".join(offending)
+    )
+
+
+def test_run_artifacts_are_redirected_away_from_the_real_data_dir():
+    """
+    The suite must not write into data/runs/.
+
+    Tests used fixed project ids and wrote workspaces and wheelhouses into the directory
+    the dev server serves: tens of gigabytes of leftovers, and tests that could pass on a
+    directory an earlier run had created. conftest redirects the runs root for the whole
+    session; this asserts the redirect is actually in force.
+    """
+    from tools import paths
+
+    root = paths.runs_root()
+    assert root != Path(paths.DEFAULT_RUNS_ROOT), "runs root was not redirected for the suite"
+    assert paths.DEFAULT_RUNS_ROOT not in str(root.resolve()).rsplit("/", 2)[0]
+
+
+def test_no_test_hardcodes_the_production_runs_directory():
+    """
+    A literal "data/runs" in a test escapes the redirect above and starts the leak again.
+    Parsed from the AST so prose in a comment or docstring cannot trip it.
+    """
+    import ast
+
+    from tools import paths
+
+    offending = []
+    for path in Path("tests").rglob("*.py"):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="ignore"))
+        except SyntaxError:
+            continue
+
+        # Docstrings are string constants too; describing the bug must not trip the guard.
+        docstrings = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                first = node.body[0] if node.body else None
+                if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+                        and isinstance(first.value.value, str)):
+                    docstrings.add(id(first.value))
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                continue
+            if id(node) in docstrings:
+                continue
+            if paths.DEFAULT_RUNS_ROOT in node.value.replace("\\", "/"):
+                offending.append(f"{path}:{node.lineno}: {node.value!r}")
+
+    assert not offending, (
+        "tests must resolve run paths through tools.paths, not a literal: "
+        + "; ".join(offending)
     )
 
 

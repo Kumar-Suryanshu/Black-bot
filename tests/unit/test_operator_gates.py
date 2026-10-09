@@ -25,6 +25,7 @@ import backend.app.runner as runner
 from agent.state import Approval, Attempt, CriticReview, Edit, PatchProposal, ProjectState
 from backend.app.db import get_project_state, save_project_state
 from backend.app.main import app
+from tools import paths
 
 client = TestClient(app)
 
@@ -121,7 +122,7 @@ def test_bannered_patch_can_actually_be_approved():
 def test_log_route_serves_a_failed_install_attempt():
     """A setup_<n>.log attempt must be served, not 404'd."""
     project_id = "P-SETUPLOG"
-    log_dir = Path("data") / "runs" / project_id / "logs"
+    log_dir = paths.logs_dir(project_id)
     log_dir.mkdir(parents=True, exist_ok=True)
     (log_dir / "setup_1.log").write_text("ERROR: Could not find a version that satisfies torch\n")
 
@@ -148,7 +149,7 @@ def test_log_route_serves_a_failed_install_attempt():
 def test_log_route_does_not_serve_a_different_attempts_log():
     """Asking for attempt 1 must never return the latest attempt's log."""
     project_id = "P-LOGMIX"
-    log_dir = Path("data") / "runs" / project_id / "logs"
+    log_dir = paths.logs_dir(project_id)
     log_dir.mkdir(parents=True, exist_ok=True)
     (log_dir / "run_1.log").write_text("FIRST ATTEMPT\n")
     (log_dir / "run_2.log").write_text("SECOND ATTEMPT\n")

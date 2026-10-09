@@ -63,3 +63,6 @@ desktop.ini
 .vscode/
 *.swp
 *~
+
+# Scratch run artifacts created by the test suite (see tests/conftest.py)
+data/.pytest-runs/

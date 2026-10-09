@@ -15,6 +15,7 @@ from backend.app.runner import start_project_worker, is_worker_running, _RUNNING
 from tools.evidence import record_evidence
 from sandbox.fake import FakeSandbox
 from agent.loop import set_sandbox
+from tools import paths
 
 client = TestClient(app)
 
@@ -219,7 +220,7 @@ def test_evidence_persistence_and_retrieval(tmp_path):
 def test_aligned_log_routes_contract(tmp_path):
     """Gate: Contract test between /runs/{n}/log and /logs/{n} returning {log: ...} (D13)."""
     proj_id = "P-LOGS"
-    log_dir = Path("data") / "runs" / proj_id / "logs"
+    log_dir = paths.logs_dir(proj_id)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / "run_1.log"
     log_content = "Line 1: init\nLine 2: train\nLine 3: done\n"

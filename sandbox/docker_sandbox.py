@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Tuple, Optional
 from agent.state import ProjectState
 from sandbox.manager import run_container, RunResult, kill_project_containers
+from tools import paths
 
 class DockerSandbox:
     """Real Docker sandbox adapter implementing the orchestrator execution interface."""
@@ -31,7 +32,7 @@ class DockerSandbox:
     def install(self, state: ProjectState, workspace: str, n: int = 1) -> Tuple[Optional[int], str, RunResult]:
         """Run a setup container mounting the offline wheelhouse to install dependencies."""
         ws = Path(workspace)
-        project_whl = Path(f"data/runs/{state.project_id}/wheelhouse")
+        project_whl = paths.wheelhouse_dir(state.project_id)
         has_req = any(ws.glob("requirements*.txt")) or (project_whl / "requirements.provision.txt").exists()
         if not has_req and not (ws / "pyproject.toml").exists() and not (ws / "setup.cfg").exists():
             dummy = RunResult(

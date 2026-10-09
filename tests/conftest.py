@@ -13,6 +13,7 @@ tests/agent/test_llm.py.
 """
 
 import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -46,4 +47,33 @@ def isolate_database_from_the_running_app():
         yield
     finally:
         app_db.set_db_path_override(None)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+@pytest.fixture(autouse=True, scope="session")
+def isolate_run_artifacts_from_the_real_data_dir():
+    """
+    Never let the suite write into data/runs/.
+
+    Tests used fixed project ids ("P-GATE-1", "b1_control", ...) and wrote workspaces,
+    wheelhouses, logs and evidence straight into the directory the dev server serves. Two
+    consequences, both real: data/runs grew to tens of gigabytes of test leftovers, and a
+    test could pass on a directory some earlier run had created rather than on anything it
+    set up itself -- so the suite was not trustworthy from a clean checkout.
+
+    Everything resolves run paths through `tools.paths`, so one redirect covers the suite.
+    """
+    from tools import paths as run_paths
+
+    # Deliberately on disk rather than under /tmp: pip unpacks wheels into TMPDIR inside the
+    # setup container, that TMPDIR is bind-mounted out of the run directory, and a RAM-backed
+    # /tmp runs out of space installing torch or scikit-learn.
+    scratch_parent = Path("data") / ".pytest-runs"
+    scratch_parent.mkdir(parents=True, exist_ok=True)
+    tmp_dir = tempfile.mkdtemp(prefix="runs_", dir=str(scratch_parent))
+    run_paths.set_runs_root(tmp_dir)
+    try:
+        yield
+    finally:
+        run_paths.set_runs_root(None)
         shutil.rmtree(tmp_dir, ignore_errors=True)

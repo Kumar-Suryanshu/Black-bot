@@ -25,6 +25,7 @@ def stop_project_worker(project_id: str):
     return runner.stop_project_worker(project_id)
 from backend.app.sse import stream_manager
 from agent.state import ProjectState, Approval
+from tools import paths
 
 router = APIRouter()
 
@@ -177,7 +178,7 @@ async def create_project(request: Request):
         project_id = f"proj_{uuid.uuid4().hex[:8]}"
         
         # Save paper
-        project_run_dir = Path("data/runs") / project_id
+        project_run_dir = paths.run_dir(project_id)
         project_run_dir.mkdir(parents=True, exist_ok=True)
         saved_paper_path = str(project_run_dir / "paper.pdf")
         Path(saved_paper_path).write_bytes(paper_bytes)
@@ -311,7 +312,7 @@ def confirm_claims(id: str, req: ClaimsConfirmRequest):
     state.allow_high_risk = req.allow_high_risk
     if req.command:
         from tools.commands import validate_command
-        val_cmd = validate_command(req.command, workspace=state.workspace or f"data/runs/{id}/workspace")
+        val_cmd = validate_command(req.command, workspace=state.workspace or paths.workspace_path(id))
         if not val_cmd["valid"]:
             raise HTTPException(status_code=400, detail=val_cmd["reason"])
         state.user_command = req.command
@@ -369,7 +370,7 @@ def approve_provisioning(id: str, req: ProvisioningApproveRequest):
         packages_to_download = [p["name"] for p in plan.get("packages", [])]
 
     python_image = plan.get("python_image", "rerun-base:py311")
-    target_whl = Path(f"data/runs/{id}/wheelhouse")
+    target_whl = paths.wheelhouse_dir(id)
 
     res = download_wheels_for_project(id, packages_to_download, target_whl, python_image=python_image)
 
@@ -413,7 +414,7 @@ def run_project_triage(id: str):
     from tools.triage import triage_report
     from pathlib import Path
     
-    ws = Path(f"data/runs/{id}/workspace")
+    ws = Path(paths.workspace_path(id))
     if not ws.exists():
         if state.benchmark_id:
             reg_path = "benchmarks/registry.json"
@@ -567,7 +568,7 @@ def process_approval(approval_id: str, req: ApprovalRequest):
             else:
                 raise HTTPException(status_code=400, detail="Invalid edit format")
 
-        ws = state.workspace or f"data/runs/{target_project_id}/workspace"
+        ws = state.workspace or paths.workspace_path(target_project_id)
         candidate_patch = patch.model_copy(deep=True)
         candidate_patch.edits = parsed_edits
 
@@ -643,7 +644,7 @@ def list_evidence(id: str):
     items = get_all_evidence("data/rerun.db", id)
     if items:
         return items
-    ledger_path = f"data/runs/{id}/evidence.json"
+    ledger_path = str(paths.evidence_ledger_path(id))
     if os.path.exists(ledger_path):
         try:
             with open(ledger_path, "r", encoding="utf-8") as f:
@@ -661,7 +662,7 @@ def get_evidence(id: str, eid: str):
     item = get_evidence_by_id("data/rerun.db", id, eid)
     if item:
         return item
-    ledger_path = f"data/runs/{id}/evidence.json"
+    ledger_path = str(paths.evidence_ledger_path(id))
     if os.path.exists(ledger_path):
         try:
             with open(ledger_path, "r", encoding="utf-8") as f:
@@ -692,7 +693,7 @@ def get_run_log(id: str, n: int, tail: Optional[int] = None):
 
     if log_path is None:
         # No project state (or no attempt recorded yet): fall back to the on-disk convention.
-        log_dir = Path(f"data/runs/{id}/logs")
+        log_dir = paths.logs_dir(id)
         matches = sorted(log_dir.glob(f"*_{n}.log")) if log_dir.is_dir() else []
         if matches:
             log_path = str(matches[0])
@@ -782,7 +783,7 @@ def delete_project(id: str):
 
     # Delete on-disk run directory
     import shutil
-    run_dir = Path(f"data/runs/{id}")
+    run_dir = paths.run_dir(id)
     if run_dir.exists():
         shutil.rmtree(run_dir, ignore_errors=True)
 
@@ -800,7 +801,7 @@ def delete_project(id: str):
 @router.get("/api/projects/{id}/disk")
 def get_project_disk(id: str):
     """Returns total disk usage for a project's run directory."""
-    run_dir = Path(f"data/runs/{id}")
+    run_dir = paths.run_dir(id)
     total_bytes = 0
     if run_dir.exists():
         for p in run_dir.rglob("*"):
