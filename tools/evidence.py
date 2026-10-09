@@ -1,10 +1,13 @@
 import hashlib
 import json
+import logging
 import os
 import shutil
 import datetime
 from agent.state import Evidence
 from tools import paths
+
+logger = logging.getLogger(__name__)
 
 
 def _project_run_dir(project_id, data_dir):
@@ -72,26 +75,31 @@ def record_evidence(project_state, type_, source_path, line_start, line_end, too
         except Exception:
             ledger = []
     ledger.append(ev.model_dump())
+
+    # Both durable writes below used to be `except: pass`. A failure then cost an audit-trail
+    # entry with no trace anywhere, while state.evidence_ids still advertised the id -- so the
+    # console showed evidence chips that resolved to nothing. Failures are now logged, loudly
+    # enough to be found, without failing the run that produced the evidence.
     try:
         with open(ledger_path, "w", encoding="utf-8") as f:
             json.dump(ledger, f, indent=2)
-    except Exception:
-        pass
-        
+    except Exception as exc:
+        logger.warning(f"evidence {ev_id}: could not write ledger {ledger_path}: {exc}")
+
     # 2. Persist to SQLite evidence table (D12)
     try:
         from backend.app.db import insert_evidence
         db_path = os.path.join(data_dir, "rerun.db") if data_dir else "data/rerun.db"
         insert_evidence(db_path, ev.model_dump(), project_state.project_id)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning(f"evidence {ev_id}: could not insert into {db_path}: {exc}")
 
     try:
         if data_dir not in (None, "data"):
             from backend.app.db import insert_evidence
             insert_evidence("data/rerun.db", ev.model_dump(), project_state.project_id)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning(f"evidence {ev_id}: could not mirror into the production db: {exc}")
 
     return ev
 

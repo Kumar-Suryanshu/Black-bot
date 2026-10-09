@@ -99,9 +99,13 @@ def init_db(db_path="data/rerun.db"):
         )
     ''')
 
+    # Evidence ids restart at E-001 in every project, so the primary key must include the
+    # project. It used to be `id` alone with INSERT OR REPLACE, which meant each new
+    # project's E-001 silently overwrote some other project's E-001: across 72 projects only
+    # 7 rows had survived, exactly one per distinct id.
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS evidence (
-            id TEXT PRIMARY KEY,
+            id TEXT,
             project_id TEXT,
             type TEXT,
             artifact_path TEXT,
@@ -111,10 +115,12 @@ def init_db(db_path="data/rerun.db"):
             excerpt TEXT,
             created_by_tool TEXT,
             tool_call_id TEXT,
-            ts TEXT
+            ts TEXT,
+            PRIMARY KEY (project_id, id)
         )
     ''')
     conn.commit()
+    _migrate_evidence_primary_key(conn)
     conn.close()
 
     # Run the one-off repair at most once per database per process. init_db is called from
@@ -124,6 +130,56 @@ def init_db(db_path="data/rerun.db"):
     if resolved not in _REPAIRED_DATABASES:
         _REPAIRED_DATABASES.add(resolved)
         repair_unknown_error_classes(db_path)
+
+
+def _migrate_evidence_primary_key(conn):
+    """
+    Rebuild a legacy `evidence` table whose primary key was `id` alone.
+
+    Rows already lost to the old key cannot be recovered -- they were overwritten in place.
+    This only stops the loss continuing. Idempotent: a table that already carries the
+    composite key is left untouched.
+    """
+    cursor = conn.cursor()
+    row = cursor.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='evidence'"
+    ).fetchone()
+    if not row or not row[0] or "PRIMARY KEY (project_id, id)" in row[0]:
+        return
+
+    try:
+        cursor.execute("ALTER TABLE evidence RENAME TO evidence_legacy_pk")
+        cursor.execute('''
+            CREATE TABLE evidence (
+                id TEXT,
+                project_id TEXT,
+                type TEXT,
+                artifact_path TEXT,
+                line_start INTEGER,
+                line_end INTEGER,
+                sha256 TEXT,
+                excerpt TEXT,
+                created_by_tool TEXT,
+                tool_call_id TEXT,
+                ts TEXT,
+                PRIMARY KEY (project_id, id)
+            )
+        ''')
+        cursor.execute('''
+            INSERT OR IGNORE INTO evidence
+            (id, project_id, type, artifact_path, line_start, line_end, sha256,
+             excerpt, created_by_tool, tool_call_id, ts)
+            SELECT id, project_id, type, artifact_path, line_start, line_end, sha256,
+                   excerpt, created_by_tool, tool_call_id, ts
+            FROM evidence_legacy_pk
+        ''')
+        cursor.execute("DROP TABLE evidence_legacy_pk")
+        conn.commit()
+        logger.info("migrated evidence table to a per-project primary key")
+    except Exception as exc:
+        conn.rollback()
+        logger.warning(f"could not migrate the evidence primary key: {exc}")
+
 
 # Databases already swept by the error_class repair in this process.
 _REPAIRED_DATABASES: set = set()
